@@ -104,6 +104,7 @@ object AngleMath {
 /**
  * 2D directional vector whose [bearingDeg] is normalized to `[0.0, 360.0)` clockwise from True North.
  */
+@ConsistentCopyVisibility
 data class Vector2D private constructor(
     val bearingDeg: Double,
     val magnitude: Double,
@@ -132,6 +133,7 @@ data class Vector2D private constructor(
 /**
  * Clockwise inclusive compass sector `[startDeg, endDeg]` supporting wrap-around across 0°/360°.
  */
+@ConsistentCopyVisibility
 data class BearingSector private constructor(
     val startDeg: Double,
     val endDeg: Double,

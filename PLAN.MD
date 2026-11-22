@@ -27,7 +27,7 @@
 ---
 
 ## Phase 3A: DropTine Commercial Rebrand, Adaptive Icon & Material 3 Multi-Theme Engine
-- [ ] **Brand Identity & Play Store IP Hygiene (`:app`, `:core:domain`)**:
+- [x] **Brand Identity & Play Store IP Hygiene (`:app`, `:core:domain`)**:
   - Update app display name to `"DropTine"` and `applicationId` to `"com.droptine.app"` in `app/build.gradle.kts` (preserving existing internal Kotlin package structure to avoid unnecessary churn).
   - Replace Drury Outdoors trademarked phase names in `MidwestRutCalendar.kt` (and update `MidwestRutCalendarTest.kt`) with original tactical whitetail phase names while preserving the exact Nov 11 peak-anchored 13-phase biological offsets:
     1. Velvet Breakup (`-57..-48`)
@@ -43,9 +43,9 @@
     11. Cold-Front Feed (`+24..+30`)
     12. Winter Recovery (`+31..+40`)
     13. Late-Season Concentrate (`+41..+65`, extendable to `+81`)
-- [ ] **DropTine Compass Bezel Adaptive Icon (`:app/src/main/res/`)**:
+- [x] **DropTine Compass Bezel Adaptive Icon (`:app/src/main/res/`)**:
   - Author clean Android Vector Drawables for `ic_launcher_foreground.xml`, `ic_launcher_background.xml`, and `ic_launcher_monochrome.xml` depicting a geometric European whitetail skull with a signature drop-tine rack framed inside a crisp tactical compass degree bezel with a highlighted North/wind needle.
-- [ ] **Material 3 Multi-Theme System (`:app`, `:core:domain`, `:core:data`)**:
+- [x] **Material 3 Multi-Theme System (`:app`, `:core:domain`, `:core:data`)**:
   - Add `AppThemePreset` enum to `:core:domain` and persist selection in Room `AppSettingsEntity` (with a clean Room schema v1 -> v2 migration keeping existing data intact and exporting `2.json`):
     1. `TIMBERLINE_DARK` *(Scout Free Default)* — Deep pine-charcoal `#0D120F` surface, sage/moss `#7EA874` primary, warm brass `#D6A456` tertiary.
     2. `TOPO_DAYLIGHT` *(Alpha)* — Topographic parchment `#F3F2EC` surface, deep forest `#2B4A35` primary, terracotta `#B8522A` tertiary.
@@ -91,34 +91,34 @@
 ---
 
 ## Phase 3D: Offline MapLibre Tactical Map (`:feature:map`) & Stand Management (`:feature:stands`)
-- [ ] **MapLibre Native 12.3.1 Compose Host**:
+- [x] **MapLibre Native 12.3.1 Compose Host**:
   - Wrap `MapView` inside `AndroidView` with a `LifecycleEventObserver` preserving camera position, zoom, and layer selection across bottom-tab switches.
   - Structure map style URLs behind a clean `MapTileConfig` provider so USGS Topo works out of the box and commercial Satellite/Hybrid providers (MapTiler/Mapbox) swap cleanly via `BuildConfig` keys before Play Store release.
-- [ ] **Base Layer Switcher (`SegmentedButton`)**:
+- [x] **Base Layer Switcher (`SegmentedButton`)**:
   - **Topo** (USGS National Map — Scout Free).
   - **Satellite**, **Hybrid**, and **Hillshade** toggle (**Alpha**; tapping on Scout opens Alpha Paywall sheet; auto-reverts to Topo if preview expires).
-- [ ] **Tactical GeoJSON Overlays**:
+- [x] **Tactical GeoJSON Overlays**:
   - **Scout Free**: Live GPS puck + rotating True-North FOV beam from `RotationVectorCompass` (Flat vs. Upright badge + calibration banner on `CALIBRATION_NEEDED`) + basic wind-direction arrow.
   - **Alpha**: **300-yard Downwind Scent Cone**, secondary **Diurnal Thermal Drift Arrow** + leeward rotor warning chip, toggleable **50–300 yd Range Rings**, **Wind vs. Facing Alignment HUD Badge** (`IN YOUR FACE`, `CROSSWIND`, `AT YOUR BACK`) with 5° hysteresis, and **Scout Mode** (tap map to project a temporary 300-yd scent cone + bearing/yardage).
-- [ ] **Stand Tagging & Detail Sheet (`:feature:stands`)**:
+- [x] **Stand Tagging & Detail Sheet (`:feature:stands`)**:
   - Enforce Scout limit (**1 Stand**, **3 Waypoints**) with Alpha upsell prompt when adding a 2nd stand or 4th waypoint; Unlimited for Alpha. Never delete stands/waypoints created during the 36-hour preview when locking back to Scout—display extras read-only with an Alpha lock badge.
   - Tag stand at current GPS or map long-press: Name, Stand Type, Stand Height (`ft`), Terrain Position, interactive **8-point Wind Rose** (`N`–`NW`), optional slope aspect/grade override, and notes.
   - Optional **Draw Entry/Exit Route** polyline tool (**Alpha**) linked to `StandRouteEntity`.
   - Color-coded stand pins (`GOOD` green, `CAUTION` amber, `UNSAFE` red, `UNSET` gray). Tapping opens Material 3 `ModalBottomSheet` with live wind verdict, distance + **Cosine-Compensated Ballistic Yardage** (**Alpha**), `StandFreshness` + one-tap **"Start Sit / End Sit"** logging (**Alpha**), `EntryRouteWindAuditor` warning (**Alpha**), and **"Project Scent"** (**Alpha**).
-- [ ] **Offline Map Pack Manager (Alpha)**:
+- [x] **Offline Map Pack Manager (Alpha)**:
   - Download current viewport bounding box (zooms 10–16) via MapLibre `OfflineManager` with explicit HTTP `User-Agent`, max tile-count guardrail, progress bar, MB estimate, error/retry handling, and delete list.
 
 ---
 
 ## Phase 3 Verification Gate
-- [ ] Add unit tests for:
+- [x] Add unit tests for:
   - Updated `CompassAndBarometerMathTest` (upright matrix continuity, MSL-to-MSL barometer trend, `360.0°` rounding).
   - Updated `MidwestRutCalendarTest` (new original phase names).
   - `EntitlementEvaluatorTest` (36h preview active at `t+0h` and `t+35h59m`, automatic Scout lockback at `t+36h00m`, clock-rollback protection, VIP/Promo comp override, 14-day offline grace window).
   - Room v1 -> v2 migration test in `:core:data` (`MigrationTestHelper` / Robolectric).
   - ViewModel unit tests for `:feature:forecast`, `:feature:map`, `:feature:stands`, and `:feature:settings`.
-- [ ] Run `.\gradlew.bat :core:domain:test :core:data:testDebugUnitTest :core:sensors:testDebugUnitTest :feature:forecast:testDebugUnitTest :feature:map:testDebugUnitTest :feature:stands:testDebugUnitTest :feature:settings:testDebugUnitTest --no-daemon` and confirm 0 failures.
-- [ ] Run `.\gradlew.bat :app:assembleDebug --no-daemon` and verify clean debug APK output.
+- [x] Run `.\gradlew.bat :core:domain:test :core:data:testDebugUnitTest :core:sensors:testDebugUnitTest :feature:forecast:testDebugUnitTest :feature:map:testDebugUnitTest :feature:stands:testDebugUnitTest :feature:settings:testDebugUnitTest --no-daemon` and confirm 0 failures.
+- [x] Run `.\gradlew.bat :app:assembleDebug --no-daemon` and verify clean debug APK output.
 
 ---
 

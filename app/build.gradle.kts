@@ -55,6 +55,7 @@ dependencies {
     implementation(libs.androidx.compose.material.icons.extended)
 
     implementation(libs.maplibre.android)
+    implementation(libs.okhttp)
     implementation(libs.revenuecat.purchases)
 
     implementation(libs.androidx.work.runtime.ktx)

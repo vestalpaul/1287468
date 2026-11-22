@@ -3,6 +3,7 @@ package com.buckcast.app
 import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
+import com.buckcast.data.entitlement.BillingGateway
 import com.buckcast.data.sync.WeatherSyncScheduler
 import com.buckcast.domain.repository.EntitlementRepository
 import dagger.hilt.android.HiltAndroidApp
@@ -25,6 +26,9 @@ class BuckCastApplication : Application(), Configuration.Provider {
     lateinit var weatherSyncScheduler: WeatherSyncScheduler
 
     @Inject
+    lateinit var billingGateway: BillingGateway
+
+    @Inject
     lateinit var entitlementRepository: EntitlementRepository
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -36,6 +40,7 @@ class BuckCastApplication : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+        MapLibre.getInstance(this)
         val tileHttpClient = OkHttpClient.Builder()
             .addInterceptor { chain ->
                 val request = chain.request().newBuilder()
@@ -45,8 +50,8 @@ class BuckCastApplication : Application(), Configuration.Provider {
             }
             .build()
         HttpRequestUtil.setOkHttpClient(tileHttpClient)
-        MapLibre.getInstance(this)
 
+        billingGateway.configureIfReady()
         weatherSyncScheduler.schedulePeriodicSync()
         appScope.launch {
             entitlementRepository.ensureInitialized()

@@ -1,6 +1,8 @@
 package com.buckcast.feature.settings
 
 import com.buckcast.domain.entitlement.DebugEntitlementOverride
+import com.buckcast.domain.entitlement.EntitlementEvaluator
+import com.buckcast.domain.entitlement.EntitlementSnapshot
 import com.buckcast.domain.entitlement.EntitlementSource
 import com.buckcast.domain.entitlement.EntitlementState
 import com.buckcast.domain.entitlement.SubscriptionTier
@@ -93,6 +95,46 @@ class SettingsViewModelTest {
         collectJob.cancel()
     }
 
+    @Test
+    fun `debug entitlement switcher transitions cleanly between FORCE_ALPHA, FORCE_SCOUT, EXPIRE_36H_PREVIEW, RESET_36H_PREVIEW and AUTO`() =
+        runTest(testDispatcher) {
+            val fakeSettingsRepo = FakeSettingsRepo()
+            val fakeEntitlementRepo = FakeEntitlementRepo(isAlpha = true)
+            val vm = SettingsViewModel(
+                settingsRepository = fakeSettingsRepo,
+                entitlementRepository = fakeEntitlementRepo,
+                runtimeConfig = AppRuntimeConfig(isDebugBuild = true, revenueCatPublicKey = "", mapTilerApiKey = ""),
+            )
+            val collectJob = launch { vm.uiState.collect() }
+            advanceUntilIdle()
+
+            assertEquals(DebugEntitlementOverride.AUTO, vm.uiState.value.entitlement.debugOverride)
+            assertTrue(vm.uiState.value.entitlement.isAlpha)
+
+            vm.setDebugOverride(DebugEntitlementOverride.FORCE_ALPHA)
+            advanceUntilIdle()
+            assertEquals(DebugEntitlementOverride.FORCE_ALPHA, vm.uiState.value.entitlement.debugOverride)
+            assertTrue(vm.uiState.value.entitlement.isAlpha)
+
+            vm.setDebugOverride(DebugEntitlementOverride.FORCE_SCOUT)
+            advanceUntilIdle()
+            assertEquals(DebugEntitlementOverride.FORCE_SCOUT, vm.uiState.value.entitlement.debugOverride)
+            assertFalse(vm.uiState.value.entitlement.isAlpha)
+
+            vm.setDebugOverride(DebugEntitlementOverride.EXPIRE_36H_PREVIEW)
+            advanceUntilIdle()
+            assertEquals(DebugEntitlementOverride.EXPIRE_36H_PREVIEW, vm.uiState.value.entitlement.debugOverride)
+            assertFalse(vm.uiState.value.entitlement.isAlpha)
+
+            vm.reset36HourPreview()
+            advanceUntilIdle()
+            assertEquals(DebugEntitlementOverride.AUTO, vm.uiState.value.entitlement.debugOverride)
+            assertTrue(vm.uiState.value.entitlement.isAlpha)
+            assertEquals(EntitlementSource.ALPHA_PREVIEW_36H, vm.uiState.value.entitlement.source)
+
+            collectJob.cancel()
+        }
+
     private class FakeSettingsRepo : SettingsRepository {
         private val flow = MutableStateFlow(AppSettings())
         override fun observeSettings(): Flow<AppSettings> = flow
@@ -106,10 +148,20 @@ class SettingsViewModelTest {
     }
 
     private class FakeEntitlementRepo(isAlpha: Boolean) : EntitlementRepository {
-        private val flow = MutableStateFlow(stateFor(if (isAlpha) SubscriptionTier.ALPHA else SubscriptionTier.SCOUT))
+        private var nowMs = if (isAlpha) 10_000L else 40L * 3_600_000L
+        private var snapshot = EntitlementSnapshot(
+            localFirstLaunchEpochMs = 0L,
+            maxObservedEpochMs = nowMs,
+            supportUserId = "dt_test",
+        )
+        private val flow = MutableStateFlow(evaluate())
+
         fun setTier(tier: SubscriptionTier) {
-            flow.value = stateFor(tier)
+            nowMs = if (tier == SubscriptionTier.ALPHA) 10_000L else 40L * 3_600_000L
+            snapshot = snapshot.copy(maxObservedEpochMs = nowMs)
+            flow.value = evaluate()
         }
+
         override fun observeEntitlement(): Flow<EntitlementState> = flow
         override suspend fun ensureInitialized() = Unit
         override suspend fun refreshEntitlements(): Result<EntitlementState> = Result.success(flow.value)
@@ -117,19 +169,21 @@ class SettingsViewModelTest {
         override suspend fun logInWithAccessCode(code: String): Result<EntitlementState> = Result.success(flow.value)
         override suspend fun purchaseAlpha(isAnnual: Boolean): Result<EntitlementState> = Result.success(flow.value)
         override suspend fun getSupportUserId(): String = "dt_test"
-        override suspend fun setDebugOverride(override: DebugEntitlementOverride) = Unit
-        override suspend fun reset36HourPreview() = Unit
+        override suspend fun setDebugOverride(override: DebugEntitlementOverride) {
+            snapshot = snapshot.copy(debugOverride = override)
+            flow.value = evaluate()
+        }
+        override suspend fun reset36HourPreview() {
+            snapshot = EntitlementSnapshot(
+                localFirstLaunchEpochMs = nowMs,
+                maxObservedEpochMs = nowMs,
+                debugOverride = DebugEntitlementOverride.AUTO,
+                supportUserId = "dt_test",
+            )
+            flow.value = evaluate()
+        }
 
-        private fun stateFor(tier: SubscriptionTier) = EntitlementState(
-            tier = tier,
-            source = if (tier == SubscriptionTier.ALPHA) EntitlementSource.ALPHA_PREVIEW_36H else EntitlementSource.NONE,
-            previewStartedEpochMs = 0L,
-            previewExpiresEpochMs = 36L * 3_600_000L,
-            subscriptionExpiresEpochMs = null,
-            lastVerifiedEpochMs = null,
-            isOfflineGraceActive = false,
-            remainingPreviewMs = if (tier == SubscriptionTier.ALPHA) 12L * 3_600_000L else 0L,
-            supportUserId = "dt_test",
-        )
+        private fun evaluate(): EntitlementState =
+            EntitlementEvaluator.evaluate(snapshot, nowEpochMs = nowMs, allowDebugOverride = true)
     }
 }

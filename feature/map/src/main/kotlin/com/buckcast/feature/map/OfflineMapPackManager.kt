@@ -11,8 +11,8 @@ import org.maplibre.android.offline.OfflineRegion
 import org.maplibre.android.offline.OfflineRegionError
 import org.maplibre.android.offline.OfflineRegionStatus
 import org.maplibre.android.offline.OfflineTilePyramidRegionDefinition
-import java.io.File
 import java.nio.charset.StandardCharsets
+import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.floor
@@ -85,6 +85,7 @@ data class OfflinePackSummary(
     val name: String,
     val minZoom: Int,
     val maxZoom: Int,
+    val completedTiles: Long,
     val completedResources: Long,
     val requiredResources: Long,
     val completedBytes: Long,
@@ -95,21 +96,28 @@ data class OfflinePackManagerState(
     val isDownloading: Boolean = false,
     val activeRegionName: String? = null,
     val progressFraction: Float = 0f,
+    val downloadedTiles: Long = 0L,
+    val downloadedBytes: Long = 0L,
+    val requiredResources: Long = 0L,
     val packs: List<OfflinePackSummary> = emptyList(),
     val errorMessage: String? = null,
     val statusMessage: String? = null,
 )
 
 /**
- * Coordinates MapLibre [OfflineManager] region downloads, progress observation, retries, and deletion.
+ * Process-scoped MapLibre [OfflineManager] coordinator preserving active download observers across tab switches.
  */
-class OfflineMapPackManager(
+class OfflineMapPackManager private constructor(
     context: Context,
 ) {
     private val appContext = context.applicationContext
     private val offlineManager = OfflineManager.getInstance(appContext)
     private val stateFlow = MutableStateFlow(OfflinePackManagerState())
     val state: StateFlow<OfflinePackManagerState> = stateFlow.asStateFlow()
+
+    // Keep strong reference while active so GC never finalizes native OfflineRegion callbacks mid-download.
+    @Volatile
+    private var activeDownloadRegion: OfflineRegion? = null
 
     fun refreshPacks() {
         offlineManager.listOfflineRegions(
@@ -135,6 +143,7 @@ class OfflineMapPackManager(
                                             name = name,
                                             minZoom = def?.minZoom?.toInt() ?: OfflineTileEstimator.DEFAULT_MIN_ZOOM,
                                             maxZoom = def?.maxZoom?.toInt() ?: OfflineTileEstimator.DEFAULT_MAX_ZOOM,
+                                            completedTiles = status?.completedTileCount ?: 0L,
                                             completedResources = status?.completedResourceCount ?: 0L,
                                             requiredResources = status?.requiredResourceCount ?: 0L,
                                             completedBytes = status?.completedResourceSize ?: 0L,
@@ -178,8 +187,9 @@ class OfflineMapPackManager(
         southLat: Double,
         eastLon: Double,
         westLon: Double,
-        styleJson: String,
-        styleFileKey: String,
+        baseLayer: MapBaseLayer,
+        showHillshade: Boolean,
+        mapTilerApiKey: String,
         minZoom: Int = OfflineTileEstimator.DEFAULT_MIN_ZOOM,
         maxZoom: Int = OfflineTileEstimator.DEFAULT_MAX_ZOOM,
     ) {
@@ -200,9 +210,13 @@ class OfflineMapPackManager(
         }
 
         val cleanName = packName.trim().ifBlank { "Hunt Area" }
-        val stylesDir = File(appContext.filesDir, "offline-styles").apply { mkdirs() }
-        val styleFile = File(stylesDir, "$styleFileKey.json")
-        styleFile.writeText(styleJson, StandardCharsets.UTF_8)
+        val styleFile = MapTileConfig.writeStyleFile(
+            context = appContext,
+            baseLayer = baseLayer,
+            showHillshade = showHillshade,
+            mapTilerApiKey = mapTilerApiKey,
+        )
+        val styleUrl = Uri.fromFile(styleFile).toString()
 
         val bounds = LatLngBounds.from(
             max(northLat, southLat).coerceIn(-85.0, 85.0),
@@ -211,7 +225,7 @@ class OfflineMapPackManager(
             min(eastLon, westLon).coerceIn(-180.0, 180.0),
         )
         val definition = OfflineTilePyramidRegionDefinition(
-            Uri.fromFile(styleFile).toString(),
+            styleUrl,
             bounds,
             minZoom.toDouble(),
             maxZoom.toDouble(),
@@ -224,8 +238,11 @@ class OfflineMapPackManager(
             isDownloading = true,
             activeRegionName = cleanName,
             progressFraction = 0f,
+            downloadedTiles = 0L,
+            downloadedBytes = 0L,
+            requiredResources = estimatedTiles,
             errorMessage = null,
-            statusMessage = "Initializing offline pack...",
+            statusMessage = "Starting download from ${styleFile.name} (~$estimatedTiles tiles)...",
         )
 
         offlineManager.createOfflineRegion(
@@ -233,44 +250,72 @@ class OfflineMapPackManager(
             metadata,
             object : OfflineManager.CreateOfflineRegionCallback {
                 override fun onCreate(offlineRegion: OfflineRegion) {
+                    activeDownloadRegion = offlineRegion
+                    offlineRegion.setDeliverInactiveMessages(true)
                     offlineRegion.setObserver(
                         object : OfflineRegion.OfflineRegionObserver {
                             override fun onStatusChanged(status: OfflineRegionStatus) {
                                 val required = max(status.requiredResourceCount, 1L)
                                 val fraction = (status.completedResourceCount.toFloat() / required.toFloat())
                                     .coerceIn(0f, 1f)
+                                val mb = status.completedResourceSize / (1024.0 * 1024.0)
                                 val complete = status.isComplete
                                 stateFlow.value = stateFlow.value.copy(
                                     isDownloading = !complete,
-                                    progressFraction = fraction,
+                                    progressFraction = if (complete) 1f else fraction,
+                                    downloadedTiles = status.completedTileCount,
+                                    downloadedBytes = status.completedResourceSize,
+                                    requiredResources = status.requiredResourceCount,
                                     statusMessage = if (complete) {
-                                        "Downloaded \"$cleanName\" (${status.completedTileCount} tiles)"
+                                        String.format(
+                                            Locale.US,
+                                            "Downloaded \"%s\" · %d tiles (%.1f MB)",
+                                            cleanName,
+                                            status.completedTileCount,
+                                            mb,
+                                        )
                                     } else {
-                                        "Downloading \"$cleanName\" (${status.completedResourceCount}/${status.requiredResourceCount})"
+                                        String.format(
+                                            Locale.US,
+                                            "Downloading \"%s\" · %d tiles (%.1f MB) · %d/%d res",
+                                            cleanName,
+                                            status.completedTileCount,
+                                            mb,
+                                            status.completedResourceCount,
+                                            status.requiredResourceCount,
+                                        )
                                     },
                                 )
                                 if (complete) {
                                     offlineRegion.setDownloadState(OfflineRegion.STATE_INACTIVE)
                                     offlineRegion.setObserver(null)
+                                    activeDownloadRegion = null
                                     refreshPacks()
                                 }
                             }
 
                             override fun onError(error: OfflineRegionError) {
+                                offlineRegion.setDownloadState(OfflineRegion.STATE_INACTIVE)
+                                offlineRegion.setObserver(null)
+                                activeDownloadRegion = null
                                 stateFlow.value = stateFlow.value.copy(
                                     isDownloading = false,
-                                    errorMessage = "${error.reason}: ${error.message}",
+                                    errorMessage = "Tile download failed [${error.reason}]: ${error.message}",
                                     statusMessage = null,
                                 )
+                                refreshPacks()
                             }
 
                             override fun mapboxTileCountLimitExceeded(limit: Long) {
                                 offlineRegion.setDownloadState(OfflineRegion.STATE_INACTIVE)
+                                offlineRegion.setObserver(null)
+                                activeDownloadRegion = null
                                 stateFlow.value = stateFlow.value.copy(
                                     isDownloading = false,
                                     errorMessage = "Tile guardrail exceeded ($limit tiles). Zoom in and retry.",
                                     statusMessage = null,
                                 )
+                                refreshPacks()
                             }
                         },
                     )
@@ -278,6 +323,7 @@ class OfflineMapPackManager(
                 }
 
                 override fun onError(error: String) {
+                    activeDownloadRegion = null
                     stateFlow.value = stateFlow.value.copy(
                         isDownloading = false,
                         errorMessage = error.ifBlank { "Unable to create offline region" },
@@ -317,5 +363,15 @@ class OfflineMapPackManager(
                 }
             },
         )
+    }
+
+    companion object {
+        @Volatile
+        private var instance: OfflineMapPackManager? = null
+
+        fun getInstance(context: Context): OfflineMapPackManager =
+            instance ?: synchronized(this) {
+                instance ?: OfflineMapPackManager(context).also { instance = it }
+            }
     }
 }

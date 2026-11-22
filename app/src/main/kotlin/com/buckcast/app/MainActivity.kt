@@ -33,14 +33,19 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -101,6 +106,8 @@ private fun DropTineAppShell() {
     var selectedStandId by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingStandLat by rememberSaveable { mutableStateOf<Double?>(null) }
     var pendingStandLon by rememberSaveable { mutableStateOf<Double?>(null) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions(),
@@ -126,6 +133,7 @@ private fun DropTineAppShell() {
     DropTineTheme(preset = settingsState.effectiveThemePreset) {
         Scaffold(
             contentWindowInsets = WindowInsets.safeDrawing,
+            snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
             bottomBar = {
                 NavigationBar {
                     DropTineTab.entries.forEach { tab ->
@@ -146,6 +154,11 @@ private fun DropTineAppShell() {
                         contentPadding = innerPadding,
                         onOpenPaywall = { showPaywall = true },
                         onNavigateToMap = { selectedTab = DropTineTab.MAP },
+                        onStandClick = { standId ->
+                            mapViewModel.focusOnStand(standId)
+                            selectedTab = DropTineTab.MAP
+                            selectedStandId = standId
+                        },
                     )
                     DropTineTab.MAP -> MapScreen(
                         viewModel = mapViewModel,
@@ -193,7 +206,14 @@ private fun DropTineAppShell() {
                     )
                     pendingStandLat = null
                     pendingStandLon = null
-                    if (!saved) showPaywall = true
+                    if (!saved) {
+                        showPaywall = true
+                    } else {
+                        val displayName = name.trim().ifBlank { "Stand" }
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar("Stand '$displayName' saved")
+                        }
+                    }
                 },
                 onOpenPaywall = { showPaywall = true },
                 onDismiss = {

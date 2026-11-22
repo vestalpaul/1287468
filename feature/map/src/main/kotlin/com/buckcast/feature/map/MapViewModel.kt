@@ -41,6 +41,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
@@ -149,8 +150,14 @@ class MapViewModel @Inject constructor(
 
     private var previousWindAlignmentBadge: WindAlignmentBadge? = null
 
+    private val standsState: StateFlow<List<Stand>> = standRepository.observeStands()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    private val entitlementState: StateFlow<EntitlementState> = entitlementRepository.observeEntitlement()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, MapUiState().entitlement)
+
     private val allRoutesFlow: Flow<List<StandRoute>> =
-        standRepository.observeStands().flatMapLatest { stands ->
+        standsState.flatMapLatest { stands ->
             if (stands.isEmpty()) {
                 flowOf(emptyList())
             } else {
@@ -189,7 +196,7 @@ class MapViewModel @Inject constructor(
     }
 
     private val repoDataFlow = combine(
-        standRepository.observeStands(),
+        standsState,
         allRoutesFlow,
         fieldDataRepository.observeWaypoints(),
         weatherRepository.observeLatestCachedForecast(),
@@ -200,7 +207,7 @@ class MapViewModel @Inject constructor(
 
     val uiState: StateFlow<MapUiState> = combine(
         repoDataFlow,
-        entitlementRepository.observeEntitlement(),
+        entitlementState,
         locationProvider.observeLocation(LocationPowerMode.HIGH_ACCURACY),
         compass.observeHeading(),
         layerAndToolFlow,
@@ -227,7 +234,7 @@ class MapViewModel @Inject constructor(
         }
         // Automatically revert Alpha-only layers/overlays back to Scout-safe state when preview expires.
         viewModelScope.launch {
-            entitlementRepository.observeEntitlement().collect { entitlement ->
+            entitlementState.collect { entitlement ->
                 if (!entitlement.hasAccess(AlphaFeature.PREMIUM_MAP_LAYERS)) {
                     if (baseLayerFlow.value != MapBaseLayer.TOPO) {
                         baseLayerFlow.value = MapBaseLayer.TOPO
@@ -263,18 +270,26 @@ class MapViewModel @Inject constructor(
     }
 
     fun recenterOnUserLocation() {
-        val loc = uiState.value.userLocation ?: return
+        val loc = uiState.value.userLocation
+        if (loc == null) {
+            statusMessageFlow.value = if (uiState.value.isPermissionRequired) {
+                "Location permission required for GPS lock"
+            } else {
+                "Waiting for GPS fix..."
+            }
+            return
+        }
         cameraFlow.value = cameraFlow.value.copy(
             latitude = loc.latitude,
             longitude = loc.longitude,
-            zoom = maxOf(cameraFlow.value.zoom, 15.0),
+            zoom = maxOf(cameraFlow.value.zoom, 15.5),
             hasCenteredOnGps = true,
             jumpNonce = cameraFlow.value.jumpNonce + 1L,
         )
     }
 
     fun selectBaseLayer(layer: MapBaseLayer): Boolean {
-        if (layer.isAlphaOnly && !uiState.value.canUseAlphaLayers) {
+        if (layer.isAlphaOnly && !entitlementState.value.hasAccess(AlphaFeature.PREMIUM_MAP_LAYERS)) {
             return false
         }
         baseLayerFlow.value = layer
@@ -282,7 +297,7 @@ class MapViewModel @Inject constructor(
     }
 
     fun toggleHillshade(): Boolean {
-        if (!uiState.value.canUseAlphaLayers) {
+        if (!entitlementState.value.hasAccess(AlphaFeature.PREMIUM_MAP_LAYERS)) {
             return false
         }
         showHillshadeFlow.value = !showHillshadeFlow.value
@@ -290,7 +305,7 @@ class MapViewModel @Inject constructor(
     }
 
     fun toggleRangeRings(): Boolean {
-        if (!uiState.value.canUseScentCones) {
+        if (!entitlementState.value.hasAccess(AlphaFeature.SCENT_THERMAL_CONES)) {
             return false
         }
         showRangeRingsFlow.value = !showRangeRingsFlow.value
@@ -298,13 +313,14 @@ class MapViewModel @Inject constructor(
     }
 
     fun toggleScoutMode(): Boolean {
-        if (!uiState.value.canUseScentCones) {
+        if (!entitlementState.value.hasAccess(AlphaFeature.SCENT_THERMAL_CONES)) {
             return false
         }
         val next = !scoutModeFlow.value
         scoutModeFlow.value = next
         if (!next) {
             scoutTargetFlow.value = null
+            statusMessageFlow.value = null
         } else {
             projectedStandIdFlow.value = null
             statusMessageFlow.value = "Scout Mode active — tap anywhere on map to project wind"
@@ -312,11 +328,49 @@ class MapViewModel @Inject constructor(
         return true
     }
 
+    fun focusOnStand(standId: String) {
+        scoutModeFlow.value = false
+        scoutTargetFlow.value = null
+        statusMessageFlow.value = null
+        val immediate = uiState.value.standPins.firstOrNull { it.id == standId }?.location
+            ?: standsState.value.firstOrNull { it.id == standId }?.location
+        if (immediate != null) {
+            cameraFlow.value = cameraFlow.value.copy(
+                latitude = immediate.latitude,
+                longitude = immediate.longitude,
+                zoom = maxOf(cameraFlow.value.zoom, 15.5),
+                hasCenteredOnGps = true,
+                jumpNonce = cameraFlow.value.jumpNonce + 1L,
+            )
+            return
+        }
+        viewModelScope.launch {
+            val loaded = standRepository.observeStands()
+                .firstOrNull { list -> list.any { it.id == standId } }
+                ?.firstOrNull { it.id == standId }
+                ?.location
+                ?: return@launch
+            cameraFlow.value = cameraFlow.value.copy(
+                latitude = loaded.latitude,
+                longitude = loaded.longitude,
+                zoom = maxOf(cameraFlow.value.zoom, 15.5),
+                hasCenteredOnGps = true,
+                jumpNonce = cameraFlow.value.jumpNonce + 1L,
+            )
+        }
+    }
+
+    fun onLeaveMapScreen() {
+        statusMessageFlow.value = null
+    }
+
     fun projectStandScent(standId: String): Boolean {
-        if (!uiState.value.canUseScentCones) {
+        if (!entitlementState.value.hasAccess(AlphaFeature.SCENT_THERMAL_CONES)) {
             return false
         }
-        val stand = uiState.value.standPins.firstOrNull { it.id == standId }?.location ?: return false
+        val stand = uiState.value.standPins.firstOrNull { it.id == standId }?.location
+            ?: standsState.value.firstOrNull { it.id == standId }?.location
+            ?: return false
         scoutModeFlow.value = false
         scoutTargetFlow.value = null
         projectedStandIdFlow.value = standId
@@ -324,6 +378,7 @@ class MapViewModel @Inject constructor(
             latitude = stand.latitude,
             longitude = stand.longitude,
             zoom = maxOf(cameraFlow.value.zoom, 15.0),
+            hasCenteredOnGps = true,
             jumpNonce = cameraFlow.value.jumpNonce + 1L,
         )
         return true
@@ -335,14 +390,14 @@ class MapViewModel @Inject constructor(
             routeDrawingFlow.value = activeDrawing.copy(points = activeDrawing.points + point)
             return
         }
-        if (scoutModeFlow.value && uiState.value.canUseScentCones) {
+        if (scoutModeFlow.value && entitlementState.value.hasAccess(AlphaFeature.SCENT_THERMAL_CONES)) {
             projectedStandIdFlow.value = null
             scoutTargetFlow.value = point
         }
     }
 
     fun startRouteDrawing(standId: String, standName: String, routeType: RouteType): Boolean {
-        if (!uiState.value.entitlement.hasAccess(AlphaFeature.ROUTE_AUDITOR)) {
+        if (!entitlementState.value.hasAccess(AlphaFeature.ROUTE_AUDITOR)) {
             return false
         }
         scoutModeFlow.value = false

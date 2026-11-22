@@ -63,13 +63,23 @@ object CompassFusionMath {
     fun resolvePostureFromSkywardZ(
         r7: Double,
         previousPosture: CompassPosture,
+        r8: Double = 1.0,
     ): CompassPosture {
         require(r7.isFinite()) { "r7 must be finite: $r7" }
+        require(r8.isFinite()) { "r8 must be finite: $r8" }
         return when (previousPosture) {
             CompassPosture.FLAT_MAP ->
-                if (r7 > UPRIGHT_ENTER_SIN) CompassPosture.UPRIGHT_AIMING else CompassPosture.FLAT_MAP
+                if (r7 > UPRIGHT_ENTER_SIN || (r7 > 0.0 && r8 < 0.0)) {
+                    CompassPosture.UPRIGHT_AIMING
+                } else {
+                    CompassPosture.FLAT_MAP
+                }
             CompassPosture.UPRIGHT_AIMING ->
-                if (r7 < UPRIGHT_EXIT_SIN) CompassPosture.FLAT_MAP else CompassPosture.UPRIGHT_AIMING
+                if ((r8 < 0.0 && r7 >= 0.0) || r7 >= UPRIGHT_EXIT_SIN) {
+                    CompassPosture.UPRIGHT_AIMING
+                } else {
+                    CompassPosture.FLAT_MAP
+                }
         }
     }
 

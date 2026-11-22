@@ -89,6 +89,7 @@ open class RotationVectorCompass(
                 currentPosture = CompassFusionMath.resolvePostureFromSkywardZ(
                     r7 = remappedMatrix[7].toDouble(),
                     previousPosture = currentPosture,
+                    r8 = remappedMatrix[8].toDouble(),
                 )
                 val magneticAzimuthDeg = CompassFusionMath.extractMagneticAzimuthFromMatrix(
                     remappedMatrix = remappedMatrix,

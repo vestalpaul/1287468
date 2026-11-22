@@ -1,11 +1,14 @@
 package com.buckcast.feature.forecast
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -38,6 +41,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -52,14 +56,16 @@ fun ForecastScreen(
     contentPadding: PaddingValues,
     onOpenPaywall: () -> Unit,
     onNavigateToMap: () -> Unit,
+    onStandClick: (standId: String) -> Unit = { _ -> onNavigateToMap() },
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val layoutDirection = LocalLayoutDirection.current
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(
-            start = 16.dp,
-            end = 16.dp,
+            start = contentPadding.calculateStartPadding(layoutDirection) + 16.dp,
+            end = contentPadding.calculateEndPadding(layoutDirection) + 16.dp,
             top = contentPadding.calculateTopPadding() + 8.dp,
             bottom = contentPadding.calculateBottomPadding() + 24.dp,
         ),
@@ -110,24 +116,27 @@ fun ForecastScreen(
         }
 
         item {
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
                     text = "7-Day Whitetail Outlook",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                 )
-                SingleChoiceSegmentedButtonRow {
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                     OutlookViewMode.entries.forEachIndexed { idx, mode ->
                         SegmentedButton(
                             selected = state.outlookViewMode == mode,
                             onClick = { viewModel.setOutlookViewMode(mode) },
                             shape = SegmentedButtonDefaults.itemShape(index = idx, count = 2),
                         ) {
-                            Text(if (mode == OutlookViewMode.CARDS) "Cards" else "Timeline")
+                            Text(
+                                text = if (mode == OutlookViewMode.CARDS) "Cards" else "Timeline",
+                                maxLines = 1,
+                                softWrap = false,
+                            )
                         }
                     }
                 }
@@ -185,7 +194,11 @@ fun ForecastScreen(
                     }
                 }
                 if (state.rankedStands.isEmpty()) {
-                    Card(modifier = Modifier.fillMaxWidth()) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    ) {
                         Text(
                             text = "No stands saved yet. Open the Map tab to tag a stand and inspect live wind & thermal vectors.",
                             modifier = Modifier.padding(14.dp),
@@ -198,7 +211,7 @@ fun ForecastScreen(
                             RankedStandRow(
                                 item = item,
                                 onClick = {
-                                    if (item.isLockedByScout) onOpenPaywall() else onNavigateToMap()
+                                    if (item.isLockedByScout) onOpenPaywall() else onStandClick(item.stand.id)
                                 },
                             )
                         }
@@ -325,6 +338,10 @@ private fun HeroTodayCard(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 3.dp),
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(
@@ -412,6 +429,8 @@ private fun OutlookDayCard(
         modifier = Modifier
             .width(134.dp)
             .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(
@@ -464,6 +483,8 @@ private fun OutlookTimelineRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
@@ -510,6 +531,8 @@ private fun RankedStandRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Row(
             modifier = Modifier.padding(14.dp),

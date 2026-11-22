@@ -167,23 +167,25 @@ fun DualSunMoonArcCanvas(
             }
         }
 
-        Row(
+        val legalStart = solar.legalShootingStart?.let { timeFmt.format(it) } ?: "--"
+        val legalEnd = solar.legalShootingEnd?.let { timeFmt.format(it) } ?: "--"
+        val moonRiseStr = lunar.moonrise?.let { timeFmt.format(it) } ?: "--"
+        val moonSetStr = lunar.moonset?.let { timeFmt.format(it) } ?: "--"
+        Column(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
-            val legalStart = solar.legalShootingStart?.let { timeFmt.format(it) } ?: "--"
-            val legalEnd = solar.legalShootingEnd?.let { timeFmt.format(it) } ?: "--"
-            val moonRiseStr = lunar.moonrise?.let { timeFmt.format(it) } ?: "--"
-            val moonSetStr = lunar.moonset?.let { timeFmt.format(it) } ?: "--"
             Text(
                 text = "Legal Light: $legalStart – $legalEnd",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
             )
             Text(
-                text = "Moon: ↑$moonRiseStr ↓$moonSetStr",
+                text = "Moon: ↑$moonRiseStr · ↓$moonSetStr",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.secondary,
+                maxLines = 1,
             )
         }
     }

@@ -1,5 +1,6 @@
 package com.buckcast.feature.settings
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -11,6 +12,8 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -20,6 +23,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Lock
@@ -29,11 +33,13 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -46,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -63,98 +70,114 @@ fun SettingsScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val clipboard = LocalClipboardManager.current
+    val layoutDirection = LocalLayoutDirection.current
     var showAccessCodeDialog by remember { mutableStateOf(false) }
     var copiedNotice by remember { mutableStateOf(false) }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(
-            start = 16.dp,
-            end = 16.dp,
-            top = contentPadding.calculateTopPadding() + 12.dp,
-            bottom = contentPadding.calculateBottomPadding() + 24.dp,
-        ),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(
+                start = contentPadding.calculateStartPadding(layoutDirection),
+                end = contentPadding.calculateEndPadding(layoutDirection),
+                top = contentPadding.calculateTopPadding(),
+                bottom = contentPadding.calculateBottomPadding(),
+            ),
     ) {
-        item {
-            Text(
-                text = "Settings & DropTine Alpha",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-            )
-        }
-
         if (!state.statusMessage.isNullOrBlank()) {
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                    ),
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                shape = MaterialTheme.shapes.medium,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = state.statusMessage.orEmpty(),
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(onClick = viewModel::clearMessage) {
-                            Text("OK")
-                        }
+                    Text(
+                        text = state.statusMessage.orEmpty(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = viewModel::clearMessage) {
+                        Text("OK")
                     }
                 }
             }
         }
 
-        item {
-            SubscriptionCard(
-                state = state,
-                copiedNotice = copiedNotice,
-                onCopySupportId = {
-                    if (state.entitlement.supportUserId.isNotBlank()) {
-                        clipboard.setText(AnnotatedString(state.entitlement.supportUserId))
-                        copiedNotice = true
-                    }
-                },
-                onOpenPaywall = onOpenPaywall,
-                onOpenAccessCode = { showAccessCodeDialog = true },
-            )
-        }
-
-        item {
-            ThemePickerCard(
-                selected = state.effectiveThemePreset,
-                isAlpha = state.entitlement.isAlpha,
-                onSelect = { preset ->
-                    if (!viewModel.selectThemePreset(preset)) {
-                        onOpenPaywall()
-                    }
-                },
-            )
-        }
-
-        item {
-            CalibrationCard(
-                peakRutMonthDay = state.settings.peakRutMonthDay,
-                beforeSunriseMin = state.settings.legalLightBeforeSunriseMinutes,
-                afterSunsetMin = state.settings.legalLightAfterSunsetMinutes,
-                onSelectPeakRut = viewModel::updatePeakRutDate,
-                onSelectLegalOffsets = viewModel::updateLegalLightOffsets,
-            )
-        }
-
-        if (state.isDebugBuild) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            contentPadding = PaddingValues(
+                start = 16.dp,
+                end = 16.dp,
+                top = 12.dp,
+                bottom = 24.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
             item {
-                DebugEntitlementCard(
-                    currentOverride = state.entitlement.debugOverride,
-                    onSelectOverride = viewModel::setDebugOverride,
-                    onResetPreview = viewModel::reset36HourPreview,
+                Text(
+                    text = "Settings & DropTine Alpha",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
                 )
+            }
+
+            item {
+                SubscriptionCard(
+                    state = state,
+                    copiedNotice = copiedNotice,
+                    onCopySupportId = {
+                        if (state.entitlement.supportUserId.isNotBlank()) {
+                            clipboard.setText(AnnotatedString(state.entitlement.supportUserId))
+                            copiedNotice = true
+                        }
+                    },
+                    onOpenPaywall = onOpenPaywall,
+                    onOpenAccessCode = { showAccessCodeDialog = true },
+                )
+            }
+
+            item {
+                ThemePickerCard(
+                    selected = state.effectiveThemePreset,
+                    isAlpha = state.entitlement.isAlpha,
+                    onSelect = { preset ->
+                        if (!viewModel.selectThemePreset(preset)) {
+                            onOpenPaywall()
+                        }
+                    },
+                )
+            }
+
+            item {
+                CalibrationCard(
+                    peakRutMonthDay = state.settings.peakRutMonthDay,
+                    beforeSunriseMin = state.settings.legalLightBeforeSunriseMinutes,
+                    afterSunsetMin = state.settings.legalLightAfterSunsetMinutes,
+                    onSelectPeakRut = viewModel::updatePeakRutDate,
+                    onSelectLegalOffsets = viewModel::updateLegalLightOffsets,
+                )
+            }
+
+            if (state.isDebugBuild) {
+                item {
+                    DebugEntitlementCard(
+                        entitlement = state.entitlement,
+                        onSelectOverride = viewModel::setDebugOverride,
+                        onResetPreview = viewModel::reset36HourPreview,
+                    )
+                }
             }
         }
     }
@@ -179,7 +202,11 @@ private fun SubscriptionCard(
     onOpenAccessCode: () -> Unit,
 ) {
     val ent = state.entitlement
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
@@ -258,7 +285,11 @@ private fun ThemePickerCard(
     isAlpha: Boolean,
     onSelect: (AppThemePreset) -> Unit,
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(
                 text = "Appearance & Night-Vision Themes",
@@ -331,10 +362,10 @@ private fun ThemePickerCard(
 }
 
 private fun themeSwatches(preset: AppThemePreset): Pair<Color, Color> = when (preset) {
-    AppThemePreset.TIMBERLINE_DARK -> Color(0xFF0D120F) to Color(0xFF7EA874)
-    AppThemePreset.TOPO_DAYLIGHT -> Color(0xFFF3F2EC) to Color(0xFF2B4A35)
-    AppThemePreset.STEALTH_CRIMSON -> Color(0xFF000000) to Color(0xFFEF5350)
-    AppThemePreset.BLAZE_SLATE -> Color(0xFF111418) to Color(0xFFE65100)
+    AppThemePreset.TIMBERLINE_DARK -> Color(0xFF08110C) to Color(0xFF7CC97E)
+    AppThemePreset.TOPO_DAYLIGHT -> Color(0xFFF4F1E8) to Color(0xFF1B4332)
+    AppThemePreset.STEALTH_CRIMSON -> Color(0xFF000000) to Color(0xFFD32F2F)
+    AppThemePreset.BLAZE_SLATE -> Color(0xFF0D131A) to Color(0xFFFF5722)
     AppThemePreset.MATERIAL_YOU -> Color(0xFF2B332E) to Color(0xFFA8D5BA)
 }
 
@@ -347,7 +378,11 @@ private fun CalibrationCard(
     onSelectPeakRut: (Int, Int) -> Unit,
     onSelectLegalOffsets: (Long, Long) -> Unit,
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(
                 text = "Rut & Legal Light Calibration",
@@ -392,13 +427,15 @@ private fun CalibrationCard(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DebugEntitlementCard(
-    currentOverride: DebugEntitlementOverride,
+    entitlement: com.buckcast.domain.entitlement.EntitlementState,
     onSelectOverride: (DebugEntitlementOverride) -> Unit,
     onResetPreview: () -> Unit,
 ) {
+    val currentOverride = entitlement.debugOverride
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
@@ -406,12 +443,35 @@ private fun DebugEntitlementCard(
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
             )
+            Text(
+                text = "Tier: ${entitlement.tier.name} · Source: ${entitlement.source.name} · Override: ${currentOverride.name}",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold,
+            )
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 DebugEntitlementOverride.entries.forEach { mode ->
+                    val isSelected = currentOverride == mode
                     FilterChip(
-                        selected = currentOverride == mode,
+                        selected = isSelected,
                         onClick = { onSelectOverride(mode) },
-                        label = { Text(mode.name) },
+                        leadingIcon = if (isSelected) {
+                            {
+                                Icon(
+                                    imageVector = Icons.Rounded.Check,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        } else {
+                            null
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primary,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+                            selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimary,
+                        ),
+                        label = { Text(mode.name, maxLines = 1, softWrap = false) },
                     )
                 }
             }

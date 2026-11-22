@@ -1,5 +1,8 @@
 package com.buckcast.feature.map
 
+import android.graphics.RectF
+import android.os.SystemClock
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -7,14 +10,17 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.AddLocationAlt
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DownloadForOffline
@@ -22,14 +28,14 @@ import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.MyLocation
-import androidx.compose.material.icons.rounded.Undo
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -46,13 +52,17 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -86,23 +96,25 @@ private const val SRC_RANGE_RINGS = "droptine-rings-src"
 private const val SRC_SCENT_CONE = "droptine-scent-src"
 private const val SRC_WIND_ARROW = "droptine-wind-src"
 private const val SRC_THERMAL_ARROW = "droptine-thermal-src"
+private const val SRC_USER_FOV = "droptine-user-fov-src"
 private const val SRC_WAYPOINTS = "droptine-waypoints-src"
 private const val SRC_STANDS = "droptine-stands-src"
-private const val SRC_USER_FOV = "droptine-user-fov-src"
 
 private const val LAYER_ROUTES = "droptine-routes-layer"
 private const val LAYER_DRAFT_VERTICES = "droptine-draft-vertices-layer"
+private const val LAYER_RANGE_RINGS_HALO = "droptine-rings-halo-layer"
 private const val LAYER_RANGE_RINGS = "droptine-rings-layer"
 private const val LAYER_RANGE_RING_LABELS = "droptine-rings-labels-layer"
 private const val LAYER_SCENT_FILL = "droptine-scent-fill"
 private const val LAYER_SCENT_OUTLINE = "droptine-scent-outline"
 private const val LAYER_WIND_ARROW = "droptine-wind-layer"
 private const val LAYER_THERMAL_ARROW = "droptine-thermal-layer"
+private const val LAYER_USER_FOV = "droptine-user-fov-layer"
+private const val LAYER_USER_FOV_OUTLINE = "droptine-user-fov-outline-layer"
+private const val LAYER_USER_PUCK = "droptine-user-puck-layer"
 private const val LAYER_WAYPOINTS = "droptine-waypoints-layer"
 private const val LAYER_STANDS = "droptine-stands-layer"
 private const val LAYER_STAND_LABELS = "droptine-stands-labels-layer"
-private const val LAYER_USER_FOV = "droptine-user-fov-layer"
-private const val LAYER_USER_PUCK = "droptine-user-puck-layer"
 
 @Composable
 fun MapScreen(
@@ -126,11 +138,18 @@ fun MapScreen(
     var mapLibreMap by remember { mutableStateOf<MapLibreMap?>(null) }
     var styleReadyVersion by remember { mutableIntStateOf(0) }
     var centeredOnGpsOnce by remember { mutableStateOf(false) }
+    var lastHandledJumpNonce by remember { mutableLongStateOf(state.camera.jumpNonce) }
 
-    val offlinePackManager = remember { OfflineMapPackManager(context) }
+    val offlinePackManager = remember(context) { OfflineMapPackManager.getInstance(context) }
     val packState by offlinePackManager.state.collectAsStateWithLifecycle()
     var showOfflineSheet by remember { mutableStateOf(false) }
     var capturedBounds by remember { mutableStateOf<ViewportBoundingBox?>(null) }
+
+    DisposableEffect(viewModel) {
+        onDispose {
+            viewModel.onLeaveMapScreen()
+        }
+    }
 
     DisposableEffect(lifecycleOwner, mapView) {
         val observer = LifecycleEventObserver { _, event ->
@@ -184,7 +203,14 @@ fun MapScreen(
                 val cur = latestState
                 if (cur.routeDrawing == null && !cur.scoutModeEnabled) {
                     val screenPt = map.projection.toScreenLocation(latLng)
-                    val hits = map.queryRenderedFeatures(screenPt, LAYER_STANDS)
+                    val hitRadiusPx = 24f * context.resources.displayMetrics.density
+                    val hitRect = RectF(
+                        screenPt.x - hitRadiusPx,
+                        screenPt.y - hitRadiusPx,
+                        screenPt.x + hitRadiusPx,
+                        screenPt.y + hitRadiusPx,
+                    )
+                    val hits = map.queryRenderedFeatures(hitRect, LAYER_STANDS, LAYER_STAND_LABELS)
                     val standId = hits.firstOrNull()?.getStringProperty("id")
                     if (!standId.isNullOrBlank()) {
                         latestOnStandSelected(standId)
@@ -208,11 +234,12 @@ fun MapScreen(
         }
     }
 
-    // Center camera once automatically when first GPS fix arrives, or on programmatic jumps.
+    // Center camera once automatically when first GPS fix arrives, or on programmatic stand/GPS jumps.
     LaunchedEffect(mapLibreMap, state.camera.hasCenteredOnGps, state.camera.jumpNonce) {
         val map = mapLibreMap ?: return@LaunchedEffect
         val shouldJumpToGps = state.camera.hasCenteredOnGps && !centeredOnGpsOnce
-        if (shouldJumpToGps || state.camera.jumpNonce > 0L) {
+        val isExplicitJump = state.camera.jumpNonce > lastHandledJumpNonce
+        if (shouldJumpToGps || isExplicitJump) {
             map.animateCamera(
                 CameraUpdateFactory.newLatLngZoom(
                     LatLng(state.camera.latitude, state.camera.longitude),
@@ -220,29 +247,77 @@ fun MapScreen(
                 ),
             )
             if (shouldJumpToGps) centeredOnGpsOnce = true
+            if (isExplicitJump) lastHandledJumpNonce = state.camera.jumpNonce
         }
     }
 
     val styleKey = Triple(state.baseLayer, state.showHillshade, state.mapTilerApiKey)
     LaunchedEffect(mapLibreMap, styleKey) {
         val map = mapLibreMap ?: return@LaunchedEffect
-        val json = MapTileConfig.buildStyleJson(
+        val styleUri = MapTileConfig.styleFileUri(
+            context = context,
             baseLayer = state.baseLayer,
             showHillshade = state.showHillshade,
             mapTilerApiKey = state.mapTilerApiKey,
         )
-        map.setStyle(Style.Builder().fromJson(json)) { style ->
+        map.setStyle(Style.Builder().fromUri(styleUri)) { style ->
             ensureTacticalLayers(style)
-            applyTacticalGeoJson(style, latestState)
+            applyStaticAndWindOverlays(style, latestState)
+            applyUserFovOverlay(
+                style = style,
+                userLocation = latestState.userLocation,
+                trueHeadingDeg = latestState.compassReading?.trueHeadingDeg ?: 0.0,
+            )
             styleReadyVersion++
         }
     }
 
-    LaunchedEffect(mapLibreMap, styleReadyVersion, state) {
+    val overlayKey = listOf(
+        state.routes,
+        state.routeDrawing,
+        state.showRangeRings,
+        state.userLocation,
+        state.scoutResult,
+        state.canUseScentCones,
+        state.scentOrigin,
+        state.scentToDeg,
+        state.windFromDeg,
+        state.thermalDrift,
+        state.waypoints,
+        state.lockedWaypointIds,
+        state.standPins,
+    )
+    LaunchedEffect(mapLibreMap, styleReadyVersion, overlayKey) {
         val style = mapLibreMap?.style ?: return@LaunchedEffect
         if (!style.isFullyLoaded) return@LaunchedEffect
-        applyTacticalGeoJson(style, state)
+        applyStaticAndWindOverlays(style, state)
     }
+
+    // Dedicated ~20 Hz stream for live rotating True-North FOV cone.
+    LaunchedEffect(mapLibreMap, styleReadyVersion) {
+        val map = mapLibreMap ?: return@LaunchedEffect
+        var lastPushMs = 0L
+        snapshotFlow {
+            latestState.userLocation to latestState.compassReading?.trueHeadingDeg
+        }.collect { (loc, heading) ->
+            val style = map.style
+            if (style != null && style.isFullyLoaded) {
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastPushMs >= 40L) {
+                    lastPushMs = now
+                    applyUserFovOverlay(
+                        style = style,
+                        userLocation = loc,
+                        trueHeadingDeg = heading ?: 0.0,
+                    )
+                }
+            }
+        }
+    }
+
+    val hudSurfaceColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.94f)
+    val hudBorder = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    val layoutDirection = LocalLayoutDirection.current
 
     Box(modifier = Modifier.fillMaxSize()) {
         AndroidView(
@@ -250,116 +325,159 @@ fun MapScreen(
             modifier = Modifier.fillMaxSize(),
         )
 
-        // Top HUD Stack (Base layers + feature toggles + Calibration/Thermal banners)
+        // Top HUD Stack (High-contrast base layer switcher + tactical chips + banners)
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
                 .padding(
                     top = contentPadding.calculateTopPadding() + 8.dp,
-                    start = 12.dp,
-                    end = 12.dp,
+                    start = contentPadding.calculateStartPadding(layoutDirection) + 12.dp,
+                    end = contentPadding.calculateEndPadding(layoutDirection) + 12.dp,
                 ),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                MapBaseLayer.entries.forEachIndexed { idx, layer ->
-                    val locked = layer.isAlphaOnly && !state.canUseAlphaLayers
-                    SegmentedButton(
-                        selected = state.baseLayer == layer,
-                        onClick = {
-                            if (!viewModel.selectBaseLayer(layer)) onOpenPaywall()
-                        },
-                        shape = SegmentedButtonDefaults.itemShape(idx, MapBaseLayer.entries.size),
-                        icon = {
-                            if (locked) {
-                                Icon(Icons.Rounded.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
-                            }
-                        },
-                    ) {
-                        Text(layer.label, maxLines = 1)
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = hudSurfaceColor,
+                border = hudBorder,
+                shadowElevation = 4.dp,
+            ) {
+                SingleChoiceSegmentedButtonRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(4.dp),
+                ) {
+                    MapBaseLayer.entries.forEachIndexed { idx, layer ->
+                        val locked = layer.isAlphaOnly && !state.canUseAlphaLayers
+                        SegmentedButton(
+                            selected = state.baseLayer == layer,
+                            onClick = {
+                                if (!viewModel.selectBaseLayer(layer)) onOpenPaywall()
+                            },
+                            shape = SegmentedButtonDefaults.itemShape(idx, MapBaseLayer.entries.size),
+                            colors = SegmentedButtonDefaults.colors(
+                                activeContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                activeContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                inactiveContainerColor = Color.Transparent,
+                                inactiveContentColor = MaterialTheme.colorScheme.onSurface,
+                            ),
+                            icon = {
+                                if (locked) {
+                                    Icon(Icons.Rounded.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
+                                }
+                            },
+                        ) {
+                            Text(layer.label, maxLines = 1, softWrap = false)
+                        }
                     }
                 }
             }
 
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = hudSurfaceColor,
+                border = hudBorder,
+                shadowElevation = 4.dp,
             ) {
-                FilterChip(
-                    selected = state.showHillshade,
-                    onClick = { if (!viewModel.toggleHillshade()) onOpenPaywall() },
-                    label = { Text("Hillshade") },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = if (state.canUseAlphaLayers) Icons.Rounded.Layers else Icons.Rounded.Lock,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                        )
-                    },
-                )
-                FilterChip(
-                    selected = state.showRangeRings,
-                    onClick = { if (!viewModel.toggleRangeRings()) onOpenPaywall() },
-                    label = { Text("Rings") },
-                    leadingIcon = if (!state.canUseScentCones) {
-                        { Icon(Icons.Rounded.Lock, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                    } else null,
-                )
-                FilterChip(
-                    selected = state.scoutModeEnabled,
-                    onClick = { if (!viewModel.toggleScoutMode()) onOpenPaywall() },
-                    label = { Text("Scout") },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = if (state.canUseScentCones) Icons.Rounded.Explore else Icons.Rounded.Lock,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                        )
-                    },
-                )
-                AssistChip(
-                    onClick = {
-                        if (!state.canUseOfflinePacks) {
-                            onOpenPaywall()
-                        } else {
-                            val bounds = mapLibreMap?.projection?.visibleRegion?.latLngBounds
-                            capturedBounds = if (bounds != null) {
-                                ViewportBoundingBox(
-                                    northLat = bounds.latitudeNorth,
-                                    southLat = bounds.latitudeSouth,
-                                    eastLon = bounds.longitudeEast,
-                                    westLon = bounds.longitudeWest,
-                                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    val chipColors = FilterChipDefaults.filterChipColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                        labelColor = MaterialTheme.colorScheme.onSurface,
+                        iconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                    FilterChip(
+                        selected = state.showHillshade,
+                        onClick = { if (!viewModel.toggleHillshade()) onOpenPaywall() },
+                        colors = chipColors,
+                        label = { Text("Hillshade", maxLines = 1, softWrap = false) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = if (state.canUseAlphaLayers) Icons.Rounded.Layers else Icons.Rounded.Lock,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        },
+                    )
+                    FilterChip(
+                        selected = state.showRangeRings,
+                        onClick = { if (!viewModel.toggleRangeRings()) onOpenPaywall() },
+                        colors = chipColors,
+                        label = { Text("Rings", maxLines = 1, softWrap = false) },
+                        leadingIcon = if (!state.canUseScentCones) {
+                            { Icon(Icons.Rounded.Lock, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                        } else null,
+                    )
+                    FilterChip(
+                        selected = state.scoutModeEnabled,
+                        onClick = { if (!viewModel.toggleScoutMode()) onOpenPaywall() },
+                        colors = chipColors,
+                        label = { Text("Scout", maxLines = 1, softWrap = false) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = if (state.canUseScentCones) Icons.Rounded.Explore else Icons.Rounded.Lock,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        },
+                    )
+                    AssistChip(
+                        onClick = {
+                            if (!state.canUseOfflinePacks) {
+                                onOpenPaywall()
                             } else {
-                                ViewportBoundingBox(
-                                    northLat = state.camera.latitude + 0.04,
-                                    southLat = state.camera.latitude - 0.04,
-                                    eastLon = state.camera.longitude + 0.05,
-                                    westLon = state.camera.longitude - 0.05,
-                                )
+                                val bounds = mapLibreMap?.projection?.visibleRegion?.latLngBounds
+                                capturedBounds = if (bounds != null) {
+                                    ViewportBoundingBox(
+                                        northLat = bounds.latitudeNorth,
+                                        southLat = bounds.latitudeSouth,
+                                        eastLon = bounds.longitudeEast,
+                                        westLon = bounds.longitudeWest,
+                                    )
+                                } else {
+                                    ViewportBoundingBox(
+                                        northLat = state.camera.latitude + 0.04,
+                                        southLat = state.camera.latitude - 0.04,
+                                        eastLon = state.camera.longitude + 0.05,
+                                        westLon = state.camera.longitude - 0.05,
+                                    )
+                                }
+                                offlinePackManager.refreshPacks()
+                                showOfflineSheet = true
                             }
-                            offlinePackManager.refreshPacks()
-                            showOfflineSheet = true
-                        }
-                    },
-                    label = { Text("Offline") },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = if (state.canUseOfflinePacks) Icons.Rounded.DownloadForOffline else Icons.Rounded.Lock,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                        )
-                    },
-                )
+                        },
+                        colors = AssistChipDefaults.assistChipColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                            labelColor = MaterialTheme.colorScheme.onSurface,
+                            leadingIconContentColor = MaterialTheme.colorScheme.primary,
+                        ),
+                        label = { Text("Offline", maxLines = 1, softWrap = false) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = if (state.canUseOfflinePacks) Icons.Rounded.DownloadForOffline else Icons.Rounded.Lock,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        },
+                    )
+                }
             }
 
             if (state.compassReading?.accuracy == CompassAccuracy.CALIBRATION_NEEDED) {
                 Surface(
                     color = MaterialTheme.colorScheme.errorContainer,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
                     shape = MaterialTheme.shapes.small,
+                    shadowElevation = 2.dp,
                 ) {
                     Row(
                         modifier = Modifier
@@ -387,7 +505,9 @@ fun MapScreen(
                 if (thermal.isLeewardRotorRisk || thermal.isTransitionSwirlRisk) {
                     Surface(
                         color = MaterialTheme.colorScheme.tertiaryContainer,
+                        border = hudBorder,
                         shape = MaterialTheme.shapes.small,
+                        shadowElevation = 2.dp,
                     ) {
                         Text(
                             text = if (thermal.isLeewardRotorRisk) {
@@ -411,15 +531,17 @@ fun MapScreen(
                 .fillMaxWidth()
                 .padding(
                     bottom = contentPadding.calculateBottomPadding() + 12.dp,
-                    start = 12.dp,
-                    end = 12.dp,
+                    start = contentPadding.calculateStartPadding(layoutDirection) + 12.dp,
+                    end = contentPadding.calculateEndPadding(layoutDirection) + 12.dp,
                 ),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             state.statusMessage?.let { msg ->
                 Surface(
                     color = MaterialTheme.colorScheme.secondaryContainer,
+                    border = hudBorder,
                     shape = MaterialTheme.shapes.medium,
+                    shadowElevation = 4.dp,
                 ) {
                     Row(
                         modifier = Modifier
@@ -442,7 +564,12 @@ fun MapScreen(
             }
 
             state.scoutResult?.let { scout ->
-                ElevatedCard {
+                Surface(
+                    color = hudSurfaceColor,
+                    border = hudBorder,
+                    shape = MaterialTheme.shapes.medium,
+                    shadowElevation = 4.dp,
+                ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -457,7 +584,7 @@ fun MapScreen(
                                 fontWeight = FontWeight.Bold,
                             )
                             val distText = scout.distanceYards?.let { String.format(Locale.US, "%.0f yd", it) } ?: "Tap point"
-                            val bearText = scout.bearingFromUserDeg?.let { CompassFusionMathLabel(it) } ?: ""
+                            val bearText = scout.bearingFromUserDeg?.let { compassHeadingLabel(it) } ?: ""
                             Text(
                                 text = "$distText $bearText · Scent blows ${CompassDirection.fromBearing(scout.scentToDeg).abbreviation} @ ${scout.windSpeedMph.toInt()} mph",
                                 style = MaterialTheme.typography.bodySmall,
@@ -474,7 +601,7 @@ fun MapScreen(
             state.routeDrawing?.let { drawing ->
                 ElevatedCard(
                     colors = CardDefaults.elevatedCardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                     ),
                 ) {
                     Column(
@@ -496,7 +623,7 @@ fun MapScreen(
                                 onClick = viewModel::undoLastRoutePoint,
                                 enabled = drawing.points.isNotEmpty(),
                             ) {
-                                Icon(Icons.Rounded.Undo, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Icon(Icons.AutoMirrored.Rounded.Undo, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Text("Undo", modifier = Modifier.padding(start = 4.dp))
                             }
                             OutlinedButton(onClick = viewModel::cancelRouteDrawing) {
@@ -518,7 +645,13 @@ fun MapScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.Bottom,
             ) {
-                ElevatedCard(modifier = Modifier.weight(1f, fill = false)) {
+                Surface(
+                    modifier = Modifier.weight(1f, fill = false),
+                    shape = MaterialTheme.shapes.medium,
+                    color = hudSurfaceColor,
+                    border = hudBorder,
+                    shadowElevation = 4.dp,
+                ) {
                     Column(
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -582,18 +715,9 @@ fun MapScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     SmallFloatingActionButton(
-                        onClick = {
-                            val loc = state.userLocation
-                            if (loc != null) {
-                                mapLibreMap?.animateCamera(
-                                    CameraUpdateFactory.newLatLngZoom(
-                                        LatLng(loc.latitude, loc.longitude),
-                                        maxOf(state.camera.zoom, 15.5),
-                                    ),
-                                )
-                                viewModel.recenterOnUserLocation()
-                            }
-                        },
+                        onClick = { viewModel.recenterOnUserLocation() },
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        contentColor = MaterialTheme.colorScheme.primary,
                     ) {
                         Icon(Icons.Rounded.MyLocation, contentDescription = "Recenter on GPS")
                     }
@@ -606,8 +730,10 @@ fun MapScreen(
                             )
                             onRequestAddStand(target)
                         },
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
                     ) {
-                        Icon(Icons.Rounded.AddLocationAlt, contentDescription = "Tag Stand")
+                        Icon(Icons.Rounded.AddLocationAlt, contentDescription = "Tag Stand at GPS")
                     }
                 }
             }
@@ -622,20 +748,15 @@ fun MapScreen(
             packState = packState,
             onDownloadViewport = { name ->
                 val box = capturedBounds ?: return@OfflinePackSheet
-                val styleJson = MapTileConfig.buildStyleJson(
-                    baseLayer = state.baseLayer,
-                    showHillshade = state.showHillshade,
-                    mapTilerApiKey = state.mapTilerApiKey,
-                )
-                val key = "${state.baseLayer.name.lowercase(Locale.US)}_${if (state.showHillshade) "hill" else "base"}"
                 offlinePackManager.startDownload(
                     packName = name,
                     northLat = box.northLat,
                     southLat = box.southLat,
                     eastLon = box.eastLon,
                     westLon = box.westLon,
-                    styleJson = styleJson,
-                    styleFileKey = key,
+                    baseLayer = state.baseLayer,
+                    showHillshade = state.showHillshade,
+                    mapTilerApiKey = state.mapTilerApiKey,
                 )
             },
             onDeletePack = offlinePackManager::deletePack,
@@ -644,7 +765,7 @@ fun MapScreen(
     }
 }
 
-private fun CompassFusionMathLabel(deg: Double): String =
+private fun compassHeadingLabel(deg: Double): String =
     String.format(Locale.US, "@ %.1f°", deg)
 
 private fun ensureTacticalLayers(style: Style) {
@@ -655,9 +776,9 @@ private fun ensureTacticalLayers(style: Style) {
         SRC_SCENT_CONE,
         SRC_WIND_ARROW,
         SRC_THERMAL_ARROW,
+        SRC_USER_FOV,
         SRC_WAYPOINTS,
         SRC_STANDS,
-        SRC_USER_FOV,
     ).forEach { id ->
         if (style.getSource(id) == null) {
             style.addSource(GeoJsonSource(id, empty))
@@ -684,15 +805,26 @@ private fun ensureTacticalLayers(style: Style) {
                 ),
         )
     }
+    if (style.getLayer(LAYER_RANGE_RINGS_HALO) == null) {
+        style.addLayer(
+            LineLayer(LAYER_RANGE_RINGS_HALO, SRC_RANGE_RINGS)
+                .withFilter(Expression.eq(Expression.get("kind"), "ring"))
+                .withProperties(
+                    PropertyFactory.lineColor("#101820"),
+                    PropertyFactory.lineOpacity(0.78f),
+                    PropertyFactory.lineWidth(3.4f),
+                ),
+        )
+    }
     if (style.getLayer(LAYER_RANGE_RINGS) == null) {
         style.addLayer(
             LineLayer(LAYER_RANGE_RINGS, SRC_RANGE_RINGS)
                 .withFilter(Expression.eq(Expression.get("kind"), "ring"))
                 .withProperties(
-                    PropertyFactory.lineColor("#E0E0E0"),
-                    PropertyFactory.lineOpacity(0.6f),
-                    PropertyFactory.lineWidth(1.4f),
-                    PropertyFactory.lineDasharray(arrayOf(3f, 2f)),
+                    PropertyFactory.lineColor("#FFD54F"),
+                    PropertyFactory.lineOpacity(0.95f),
+                    PropertyFactory.lineWidth(2.0f),
+                    PropertyFactory.lineDasharray(arrayOf(4f, 2.5f)),
                 ),
         )
     }
@@ -702,12 +834,13 @@ private fun ensureTacticalLayers(style: Style) {
                 .withFilter(Expression.eq(Expression.get("kind"), "ring_label"))
                 .withProperties(
                     PropertyFactory.textField(Expression.get("label")),
-                    PropertyFactory.textFont(arrayOf("Open Sans Regular")),
-                    PropertyFactory.textSize(11f),
-                    PropertyFactory.textColor("#FFFFFF"),
-                    PropertyFactory.textHaloColor("#000000"),
-                    PropertyFactory.textHaloWidth(1.5f),
+                    PropertyFactory.textFont(arrayOf(MapTileConfig.DEFAULT_GLYPH_FONT)),
+                    PropertyFactory.textSize(12f),
+                    PropertyFactory.textColor("#FFD54F"),
+                    PropertyFactory.textHaloColor("#101820"),
+                    PropertyFactory.textHaloWidth(2.0f),
                     PropertyFactory.textAllowOverlap(true),
+                    PropertyFactory.textIgnorePlacement(true),
                 ),
         )
     }
@@ -715,15 +848,15 @@ private fun ensureTacticalLayers(style: Style) {
         style.addLayer(
             FillLayer(LAYER_SCENT_FILL, SRC_SCENT_CONE).withProperties(
                 PropertyFactory.fillColor("#FF7043"),
-                PropertyFactory.fillOpacity(0.28f),
+                PropertyFactory.fillOpacity(0.30f),
             ),
         )
     }
     if (style.getLayer(LAYER_SCENT_OUTLINE) == null) {
         style.addLayer(
             LineLayer(LAYER_SCENT_OUTLINE, SRC_SCENT_CONE).withProperties(
-                PropertyFactory.lineColor("#FF7043"),
-                PropertyFactory.lineWidth(1.8f),
+                PropertyFactory.lineColor("#FF5722"),
+                PropertyFactory.lineWidth(2.0f),
             ),
         )
     }
@@ -731,7 +864,7 @@ private fun ensureTacticalLayers(style: Style) {
         style.addLayer(
             LineLayer(LAYER_WIND_ARROW, SRC_WIND_ARROW).withProperties(
                 PropertyFactory.lineColor("#29B6F6"),
-                PropertyFactory.lineWidth(3.0f),
+                PropertyFactory.lineWidth(3.2f),
             ),
         )
     }
@@ -739,53 +872,30 @@ private fun ensureTacticalLayers(style: Style) {
         style.addLayer(
             LineLayer(LAYER_THERMAL_ARROW, SRC_THERMAL_ARROW).withProperties(
                 PropertyFactory.lineColor("#FFA726"),
-                PropertyFactory.lineWidth(2.6f),
-                PropertyFactory.lineDasharray(arrayOf(2f, 1.5f)),
+                PropertyFactory.lineWidth(2.8f),
+                PropertyFactory.lineDasharray(arrayOf(2.5f, 1.5f)),
             ),
         )
     }
-    if (style.getLayer(LAYER_WAYPOINTS) == null) {
-        style.addLayer(
-            CircleLayer(LAYER_WAYPOINTS, SRC_WAYPOINTS).withProperties(
-                PropertyFactory.circleColor(Expression.toColor(Expression.get("color"))),
-                PropertyFactory.circleRadius(6.0f),
-                PropertyFactory.circleStrokeColor("#FFFFFF"),
-                PropertyFactory.circleStrokeWidth(1.5f),
-            ),
-        )
-    }
-    if (style.getLayer(LAYER_STANDS) == null) {
-        style.addLayer(
-            CircleLayer(LAYER_STANDS, SRC_STANDS).withProperties(
-                PropertyFactory.circleColor(Expression.toColor(Expression.get("color"))),
-                PropertyFactory.circleRadius(9.5f),
-                PropertyFactory.circleStrokeColor("#FFFFFF"),
-                PropertyFactory.circleStrokeWidth(2.2f),
-            ),
-        )
-    }
-    if (style.getLayer(LAYER_STAND_LABELS) == null) {
-        style.addLayer(
-            SymbolLayer(LAYER_STAND_LABELS, SRC_STANDS).withProperties(
-                PropertyFactory.textField(Expression.get("name")),
-                PropertyFactory.textFont(arrayOf("Open Sans Regular")),
-                PropertyFactory.textSize(12f),
-                PropertyFactory.textOffset(arrayOf(0f, 1.5f)),
-                PropertyFactory.textAnchor(Property.TEXT_ANCHOR_TOP),
-                PropertyFactory.textColor("#FFFFFF"),
-                PropertyFactory.textHaloColor("#000000"),
-                PropertyFactory.textHaloWidth(1.5f),
-                PropertyFactory.textAllowOverlap(true),
-            ),
-        )
-    }
+    // Render live FOV wedge & GPS puck underneath stand/waypoint pins so pins remain visible & tappable.
     if (style.getLayer(LAYER_USER_FOV) == null) {
         style.addLayer(
             FillLayer(LAYER_USER_FOV, SRC_USER_FOV)
                 .withFilter(Expression.eq(Expression.get("kind"), "fov"))
                 .withProperties(
-                    PropertyFactory.fillColor("#4FC3F7"),
-                    PropertyFactory.fillOpacity(0.24f),
+                    PropertyFactory.fillColor("#29B6F6"),
+                    PropertyFactory.fillOpacity(0.28f),
+                ),
+        )
+    }
+    if (style.getLayer(LAYER_USER_FOV_OUTLINE) == null) {
+        style.addLayer(
+            LineLayer(LAYER_USER_FOV_OUTLINE, SRC_USER_FOV)
+                .withFilter(Expression.eq(Expression.get("kind"), "fov"))
+                .withProperties(
+                    PropertyFactory.lineColor("#0288D1"),
+                    PropertyFactory.lineWidth(1.6f),
+                    PropertyFactory.lineOpacity(0.8f),
                 ),
         )
     }
@@ -801,9 +911,45 @@ private fun ensureTacticalLayers(style: Style) {
                 ),
         )
     }
+    if (style.getLayer(LAYER_WAYPOINTS) == null) {
+        style.addLayer(
+            CircleLayer(LAYER_WAYPOINTS, SRC_WAYPOINTS).withProperties(
+                PropertyFactory.circleColor(Expression.toColor(Expression.get("color"))),
+                PropertyFactory.circleRadius(6.5f),
+                PropertyFactory.circleStrokeColor("#FFFFFF"),
+                PropertyFactory.circleStrokeWidth(1.6f),
+            ),
+        )
+    }
+    if (style.getLayer(LAYER_STANDS) == null) {
+        style.addLayer(
+            CircleLayer(LAYER_STANDS, SRC_STANDS).withProperties(
+                PropertyFactory.circleColor(Expression.toColor(Expression.get("color"))),
+                PropertyFactory.circleRadius(10.5f),
+                PropertyFactory.circleStrokeColor("#FFFFFF"),
+                PropertyFactory.circleStrokeWidth(2.5f),
+            ),
+        )
+    }
+    if (style.getLayer(LAYER_STAND_LABELS) == null) {
+        style.addLayer(
+            SymbolLayer(LAYER_STAND_LABELS, SRC_STANDS).withProperties(
+                PropertyFactory.textField(Expression.get("name")),
+                PropertyFactory.textFont(arrayOf(MapTileConfig.DEFAULT_GLYPH_FONT)),
+                PropertyFactory.textSize(12.5f),
+                PropertyFactory.textOffset(arrayOf(0f, -1.5f)),
+                PropertyFactory.textAnchor(Property.TEXT_ANCHOR_BOTTOM),
+                PropertyFactory.textColor("#FFFFFF"),
+                PropertyFactory.textHaloColor("#101820"),
+                PropertyFactory.textHaloWidth(2.2f),
+                PropertyFactory.textAllowOverlap(true),
+                PropertyFactory.textIgnorePlacement(true),
+            ),
+        )
+    }
 }
 
-private fun applyTacticalGeoJson(style: Style, state: MapUiState) {
+private fun applyStaticAndWindOverlays(style: Style, state: MapUiState) {
     style.getSourceAs<GeoJsonSource>(SRC_ROUTES)?.setGeoJson(
         TacticalGeoJsonBuilder.buildRoutesGeoJson(
             savedRoutes = state.routes,
@@ -812,7 +958,9 @@ private fun applyTacticalGeoJson(style: Style, state: MapUiState) {
         ),
     )
 
-    val ringOrigin = state.userLocation ?: GeoPoint(state.camera.latitude, state.camera.longitude)
+    val ringOrigin = state.scoutResult?.targetPoint
+        ?: state.userLocation
+        ?: GeoPoint(state.camera.latitude, state.camera.longitude)
     style.getSourceAs<GeoJsonSource>(SRC_RANGE_RINGS)?.setGeoJson(
         if (state.showRangeRings) {
             TacticalGeoJsonBuilder.buildRangeRingsGeoJson(ringOrigin)
@@ -832,7 +980,9 @@ private fun applyTacticalGeoJson(style: Style, state: MapUiState) {
         },
     )
 
-    val arrowOrigin = state.scentOrigin ?: state.userLocation ?: GeoPoint(state.camera.latitude, state.camera.longitude)
+    val arrowOrigin = state.scentOrigin
+        ?: state.userLocation
+        ?: GeoPoint(state.camera.latitude, state.camera.longitude)
     style.getSourceAs<GeoJsonSource>(SRC_WIND_ARROW)?.setGeoJson(
         TacticalGeoJsonBuilder.buildWindArrowGeoJson(
             origin = arrowOrigin,
@@ -859,12 +1009,18 @@ private fun applyTacticalGeoJson(style: Style, state: MapUiState) {
     style.getSourceAs<GeoJsonSource>(SRC_STANDS)?.setGeoJson(
         TacticalGeoJsonBuilder.buildStandsGeoJson(state.standPins),
     )
+}
 
-    val heading = state.compassReading?.trueHeadingDeg ?: 0.0
+private fun applyUserFovOverlay(
+    style: Style,
+    userLocation: GeoPoint?,
+    trueHeadingDeg: Double,
+) {
     style.getSourceAs<GeoJsonSource>(SRC_USER_FOV)?.setGeoJson(
         TacticalGeoJsonBuilder.buildUserPuckAndFovGeoJson(
-            location = state.userLocation,
-            trueHeadingDeg = heading,
+            location = userLocation,
+            trueHeadingDeg = trueHeadingDeg,
+            fovRangeYards = 140.0,
         ),
     )
 }

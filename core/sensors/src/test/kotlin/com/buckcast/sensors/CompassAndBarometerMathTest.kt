@@ -48,22 +48,42 @@ class CompassAndBarometerMathTest {
     }
 
     @Test
-    fun `3D rotation matrix column projection maintains under 0_5 deg continuity across posture switch for headings 0, 90, 215, 330`() {
-        val targetHeadings = listOf(0.0, 90.0, 215.0, 330.0)
-        val pitchAngles = listOf(0.0, 30.0, 55.0, 60.0, 75.0, 85.0)
+    fun `real Android SensorManager quaternion and gravity-magnetic matrices maintain under 0_5 deg continuity across posture switch for headings 0, 90, 118, 215, 330`() {
+        val targetHeadings = listOf(0.0, 90.0, 118.0, 215.0, 330.0)
+        val pitchAngles = listOf(0.0, 30.0, 50.0, 55.0, 65.0, 85.0, 100.0)
 
         for (heading in targetHeadings) {
             var posture = CompassPosture.FLAT_MAP
             for (pitch in pitchAngles) {
-                val matrix = buildWorldRotationMatrix(headingDeg = heading, skywardPitchDeg = pitch)
-                posture = CompassFusionMath.resolvePostureFromSkywardZ(matrix[7].toDouble(), posture)
+                val rotVec = buildQuaternionRotationVector(headingDeg = heading, skywardPitchDeg = pitch)
+                val rawMatrix = FloatArray(9)
+                val remappedMatrix = FloatArray(9)
+                SensorManager.getRotationMatrixFromVector(rawMatrix, rotVec)
+                val (axisX, axisY) = CompassFusionMath.displayAxisRemapFor(Surface.ROTATION_0)
+                SensorManager.remapCoordinateSystem(rawMatrix, axisX, axisY, remappedMatrix)
 
-                val extracted = CompassFusionMath.extractMagneticAzimuthFromMatrix(matrix, posture)
+                posture = CompassFusionMath.resolvePostureFromSkywardZ(
+                    r7 = remappedMatrix[7].toDouble(),
+                    previousPosture = posture,
+                    r8 = remappedMatrix[8].toDouble(),
+                )
+                val extracted = CompassFusionMath.extractMagneticAzimuthFromMatrix(remappedMatrix, posture)
                 val delta = AngleMath.angularDistanceDegrees(heading, extracted)
                 assertTrue(
-                    "Heading=$heading° pitch=$pitch° posture=$posture produced $extracted° (delta=$delta°)",
+                    "Quaternion heading=$heading° pitch=$pitch° posture=$posture produced $extracted° (delta=$delta°)",
                     delta < 0.5,
                 )
+
+                // Cross-check against physical gravity + magnetic vectors via SensorManager.getRotationMatrix
+                if (pitch <= 90.0) {
+                    val gmMatrix = buildPhysicalGravityMagneticMatrix(headingDeg = heading, skywardPitchDeg = pitch)
+                    val gmExtracted = CompassFusionMath.extractMagneticAzimuthFromMatrix(gmMatrix, posture)
+                    val gmDelta = AngleMath.angularDistanceDegrees(heading, gmExtracted)
+                    assertTrue(
+                        "Gravity/Mag heading=$heading° pitch=$pitch° posture=$posture produced $gmExtracted° (delta=$gmDelta°)",
+                        gmDelta < 0.5,
+                    )
+                }
             }
         }
     }
@@ -144,9 +164,10 @@ class CompassAndBarometerMathTest {
         assertNull(evaluator.record(t0, seaLevelPressureInHg = 29.10, isSeaLevelCorrected = false))
 
         // Constant sea-level pressure = 1018.0 hPa while hunter climbs 80 ft (900 ft -> 980 ft)
+        // Compute station pressures via independent ICAO Standard Atmosphere (ISA) thermodynamic equation
         val constantMslHpa = 1018.0
-        val station900FtHpa = constantMslHpa * (1.0 - GeoUnits.feetToMeters(900.0) / 44_330.0).pow(5.255)
-        val station980FtHpa = constantMslHpa * (1.0 - GeoUnits.feetToMeters(980.0) / 44_330.0).pow(5.255)
+        val station900FtHpa = isaPressureAtAltitudeFeet(seaLevelHpa = constantMslHpa, altitudeFeet = 900.0)
+        val station980FtHpa = isaPressureAtAltitudeFeet(seaLevelHpa = constantMslHpa, altitudeFeet = 980.0)
 
         val (msl1, corr1) = BarometerMath.stationToSeaLevelInHg(station900FtHpa, 900.0)
         val (msl2, corr2) = BarometerMath.stationToSeaLevelInHg(station980FtHpa, 980.0)
@@ -164,11 +185,126 @@ class CompassAndBarometerMathTest {
         assertNull(evaluator.record(t0 + 33L * 60_000L, msl2, isSeaLevelCorrected = true))
     }
 
+    @Test
+    fun `BarometerMath reduces published ICAO Standard Atmosphere station pressures back to 1013_25 hPa`() {
+        // Published ICAO Standard Atmosphere table entries (P0 = 1013.25 hPa)
+        val tableCases = listOf(
+            Triple(1_000.0, 977.17, 0.2),
+            Triple(5_000.0, 843.07, 0.3),
+            Triple(10_000.0, 696.82, 0.6),
+        )
+        for ((altFeet, stationHpa, toleranceHpa) in tableCases) {
+            val mslHpa = BarometerMath.stationToSeaLevelHpa(stationHpa = stationHpa, altitudeFeet = altFeet)
+            assertEquals(
+                "ISA sea-level reduction mismatch at $altFeet ft",
+                1013.25,
+                mslHpa,
+                toleranceHpa,
+            )
+        }
+    }
+
+    @Test
+    fun `landscape display rotations ROTATION_90 and ROTATION_270 recover exact heading under quaternion tilt`() {
+        val targetHeadings = listOf(0.0, 72.5, 135.0, 240.0, 355.0)
+        val pitchAngles = listOf(0.0, 40.0, 65.0, 85.0)
+        val landscapeRotations = listOf(
+            Surface.ROTATION_90 to 90.0,
+            Surface.ROTATION_270 to -90.0,
+        )
+
+        for ((displayRotation, rollZDeg) in landscapeRotations) {
+            val (axisX, axisY) = CompassFusionMath.displayAxisRemapFor(displayRotation)
+            for (heading in targetHeadings) {
+                var posture = CompassPosture.FLAT_MAP
+                for (pitch in pitchAngles) {
+                    val rotVec = buildQuaternionRotationVector(
+                        headingDeg = heading,
+                        skywardPitchDeg = pitch,
+                        displayRollZDeg = rollZDeg,
+                    )
+                    val rawMatrix = FloatArray(9)
+                    val remappedMatrix = FloatArray(9)
+                    SensorManager.getRotationMatrixFromVector(rawMatrix, rotVec)
+                    SensorManager.remapCoordinateSystem(rawMatrix, axisX, axisY, remappedMatrix)
+
+                    posture = CompassFusionMath.resolvePostureFromSkywardZ(
+                        r7 = remappedMatrix[7].toDouble(),
+                        previousPosture = posture,
+                        r8 = remappedMatrix[8].toDouble(),
+                    )
+                    val extracted = CompassFusionMath.extractMagneticAzimuthFromMatrix(remappedMatrix, posture)
+                    val delta = AngleMath.angularDistanceDegrees(heading, extracted)
+                    assertTrue(
+                        "rot=$displayRotation heading=$heading° pitch=$pitch° posture=$posture produced $extracted° (delta=$delta°)",
+                        delta < 0.5,
+                    )
+                }
+            }
+        }
+    }
+
     /**
-     * Constructs a 3x3 device-to-world (East, North, Up) rotation matrix for a phone facing [headingDeg]
-     * and pitched skyward by [skywardPitchDeg] (0° = flat screen up, 90° = vertical portrait facing forward).
+     * Independent ICAO Standard Atmosphere (ISA) barometric pressure formula from first-principles
+     * thermodynamic constants (T0 = 288.15 K, L = 0.0065 K/m, g0 = 9.80665 m/s^2, M = 0.0289644 kg/mol,
+     * R = 8.3144598 J/(mol*K)).
      */
-    private fun buildWorldRotationMatrix(headingDeg: Double, skywardPitchDeg: Double): FloatArray {
+    private fun isaPressureAtAltitudeFeet(seaLevelHpa: Double, altitudeFeet: Double): Double {
+        val hMeters = altitudeFeet * 0.3048
+        val t0 = 288.15
+        val lapseRate = 0.0065
+        val g0 = 9.80665
+        val molarMass = 0.0289644
+        val gasConstant = 8.3144598
+        val exponent = (g0 * molarMass) / (gasConstant * lapseRate)
+        return seaLevelHpa * (1.0 - (lapseRate * hMeters) / t0).pow(exponent)
+    }
+
+    /**
+     * Builds an Android `TYPE_ROTATION_VECTOR` `[qx, qy, qz, qw]` corresponding to rotating the screen
+     * clockwise to [headingDeg] around World Up (+Z), pitching the screen top edge skyward by
+     * [skywardPitchDeg] around screen +X, and applying optional [displayRollZDeg] around screen +Z
+     * (`q = q_yaw(-heading) * q_pitch(+skywardPitch) * q_rollZ(displayRollZDeg)`).
+     */
+    private fun buildQuaternionRotationVector(
+        headingDeg: Double,
+        skywardPitchDeg: Double,
+        displayRollZDeg: Double = 0.0,
+    ): FloatArray {
+        val halfYaw = Math.toRadians(-headingDeg) / 2.0
+        val halfPitch = Math.toRadians(skywardPitchDeg) / 2.0
+        val halfRoll = Math.toRadians(displayRollZDeg) / 2.0
+
+        // q_yaw = (0, 0, sin(halfYaw), cos(halfYaw))
+        val yZ = sin(halfYaw)
+        val yW = cos(halfYaw)
+        // q_pitch = (sin(halfPitch), 0, 0, cos(halfPitch))
+        val pX = sin(halfPitch)
+        val pW = cos(halfPitch)
+
+        // q_yp = q_yaw * q_pitch
+        val ypX = yW * pX
+        val ypY = yZ * pX
+        val ypZ = yZ * pW
+        val ypW = yW * pW
+
+        // q_roll = (0, 0, sin(halfRoll), cos(halfRoll))
+        val rZ = sin(halfRoll)
+        val rW = cos(halfRoll)
+
+        // q = q_yp * q_roll
+        val x = ypW * 0.0 + ypX * rW + ypY * rZ - ypZ * 0.0
+        val y = ypW * 0.0 - ypX * rZ + ypY * rW + ypZ * 0.0
+        val z = ypW * rZ + ypX * 0.0 - ypY * 0.0 + ypZ * rW
+        val w = ypW * rW - ypX * 0.0 - ypY * 0.0 - ypZ * rZ
+        return floatArrayOf(x.toFloat(), y.toFloat(), z.toFloat(), w.toFloat())
+    }
+
+    /**
+     * Derives the 3x3 rotation matrix directly via Android's `SensorManager.getRotationMatrix` from
+     * rotated gravity and magnetic North vectors in device coordinates.
+     */
+    private fun buildPhysicalGravityMagneticMatrix(headingDeg: Double, skywardPitchDeg: Double): FloatArray {
         val psi = Math.toRadians(headingDeg)
         val theta = Math.toRadians(skywardPitchDeg)
 
@@ -177,14 +313,26 @@ class CompassAndBarometerMathTest {
         val sinTheta = sin(theta)
         val cosTheta = cos(theta)
 
-        // Horizontal forward unit vector (azimuth = headingDeg): (sinPsi, cosPsi, 0)
-        // Right edge unit vector (+X): (cosPsi, -sinPsi, 0)
-        // Top edge unit vector (+Y) tilted skyward by theta: (sinPsi*cosTheta, cosPsi*cosTheta, sinTheta)
-        // Out-of-screen unit vector (+Z = +X cross +Y): (-sinPsi*sinTheta, -cosPsi*sinTheta, cosTheta)
-        return floatArrayOf(
-            cosPsi.toFloat(), (sinPsi * cosTheta).toFloat(), (-sinPsi * sinTheta).toFloat(),
-            (-sinPsi).toFloat(), (cosPsi * cosTheta).toFloat(), (-cosPsi * sinTheta).toFloat(),
-            0f, sinTheta.toFloat(), cosTheta.toFloat(),
+        // World vector v=(vx, vy, vz) projected onto device basis (+X, +Y, +Z):
+        // +X = (cosPsi, -sinPsi, 0)
+        // +Y = (sinPsi*cosTheta, cosPsi*cosTheta, sinTheta)
+        // +Z = (-sinPsi*sinTheta, -cosPsi*sinTheta, cosTheta)
+        // Gravity (accelerometer measures +Up = (0, 0, 9.81)) in device frame:
+        val g = 9.81
+        val gravity = floatArrayOf(
+            0f,
+            (g * sinTheta).toFloat(),
+            (g * cosTheta).toFloat(),
         )
+        // Geomagnetic North (0, 50 uT, 0) in device frame:
+        val mag = 50.0
+        val geomagnetic = floatArrayOf(
+            (mag * -sinPsi).toFloat(),
+            (mag * cosPsi * cosTheta).toFloat(),
+            (mag * -cosPsi * sinTheta).toFloat(),
+        )
+        val matrix = FloatArray(9)
+        assertTrue(SensorManager.getRotationMatrix(matrix, null, gravity, geomagnetic))
+        return matrix
     }
 }

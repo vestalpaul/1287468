@@ -170,17 +170,56 @@ class MapViewModelTest {
 
         val ringsJson = TacticalGeoJsonBuilder.buildRangeRingsGeoJson(origin)
         assertTrue(ringsJson.contains("\"50 yd\""))
+        assertTrue(ringsJson.contains("\"100 yd\""))
+        assertTrue(ringsJson.contains("\"200 yd\""))
         assertTrue(ringsJson.contains("\"300 yd\""))
 
         assertEquals("#4CAF50", TacticalGeoJsonBuilder.standPinColorHex(StandWindVerdict.GOOD, hasPreferredWind = true))
         assertEquals("#9E9E9E", TacticalGeoJsonBuilder.standPinColorHex(null, hasPreferredWind = false))
+
+        val standsJson = TacticalGeoJsonBuilder.buildStandsGeoJson(
+            listOf(
+                StandMapPin(
+                    id = "s-1",
+                    name = "Ridge Stand",
+                    location = origin,
+                    verdict = StandWindVerdict.OPTIMAL,
+                    colorHex = "#4CAF50",
+                    isLocked = false,
+                    isSelected = true,
+                ),
+            ),
+        )
+        assertTrue(standsJson.contains("\"Ridge Stand\""))
+        assertTrue(standsJson.contains("\"#4CAF50\""))
     }
 
     @Test
-    fun `MapTileConfig uses USGS Topo by default and swaps Satellite to MapTiler when key is provided`() {
+    fun `MapTileConfig builds 256px Esri Satellite, multi-layer Hybrid, and Terrarium raster-dem Hillshade styles`() {
+        assertEquals("topo.json", MapTileConfig.styleFileName(MapBaseLayer.TOPO, showHillshade = false))
+        assertEquals("satellite.json", MapTileConfig.styleFileName(MapBaseLayer.SATELLITE, showHillshade = false))
+        assertEquals("hybrid.json", MapTileConfig.styleFileName(MapBaseLayer.HYBRID, showHillshade = false))
+        assertEquals("topo_hillshade.json", MapTileConfig.styleFileName(MapBaseLayer.TOPO, showHillshade = true))
+
         val usgsTopo = MapTileConfig.buildStyleJson(MapBaseLayer.TOPO, showHillshade = false, mapTilerApiKey = "")
         assertTrue(usgsTopo.contains("USGSTopo"))
-        assertFalse(usgsTopo.contains("USGSShadedReliefOnly"))
+        assertTrue(usgsTopo.contains("\"tileSize\": 256"))
+        assertTrue(usgsTopo.contains("\"maxzoom\": 16"))
+        assertFalse(usgsTopo.contains("raster-dem"))
+
+        val esriSat = MapTileConfig.buildStyleJson(MapBaseLayer.SATELLITE, showHillshade = false, mapTilerApiKey = "")
+        assertTrue(esriSat.contains(MapTileConfig.ESRI_WORLD_IMAGERY_URL))
+        assertTrue(esriSat.contains("\"tileSize\": 256"))
+        assertTrue(esriSat.contains("\"maxzoom\": 19"))
+
+        val esriHybridWithHill = MapTileConfig.buildStyleJson(MapBaseLayer.HYBRID, showHillshade = true, mapTilerApiKey = "")
+        assertTrue(esriHybridWithHill.contains(MapTileConfig.ESRI_WORLD_IMAGERY_URL))
+        assertTrue(esriHybridWithHill.contains(MapTileConfig.ESRI_TRANSPORTATION_URL))
+        assertTrue(esriHybridWithHill.contains(MapTileConfig.ESRI_BOUNDARIES_PLACES_URL))
+        assertTrue(esriHybridWithHill.contains("\"type\": \"raster-dem\""))
+        assertTrue(esriHybridWithHill.contains("\"encoding\": \"terrarium\""))
+        assertTrue(esriHybridWithHill.contains("\"type\": \"hillshade\""))
+        assertTrue(esriHybridWithHill.contains("\"hillshade-exaggeration\": 0.7"))
 
         val mapTilerSat = MapTileConfig.buildStyleJson(
             baseLayer = MapBaseLayer.SATELLITE,
@@ -189,8 +228,90 @@ class MapViewModelTest {
         )
         assertTrue(mapTilerSat.contains("api.maptiler.com/tiles/satellite-v2"))
         assertTrue(mapTilerSat.contains("mt_test_123"))
-        assertTrue(mapTilerSat.contains("USGSShadedReliefOnly"))
+
+        assertEquals("Open Sans Semibold", MapTileConfig.DEFAULT_GLYPH_FONT)
+        for (layer in MapBaseLayer.entries) {
+            for (hillshade in listOf(false, true)) {
+                val styleJson = MapTileConfig.buildStyleJson(layer, hillshade, mapTilerApiKey = "")
+                val sourcesSection = styleJson.substringAfter("\"sources\"").substringBefore("\"layers\"")
+                val sourceBlockCount = Regex(""""type":\s*"raster(?:-dem)?"""").findAll(sourcesSection).count()
+                val tileSizeCount = Regex(""""tileSize":\s*256""").findAll(sourcesSection).count()
+                val maxZoomMatches = Regex(""""maxzoom":\s*(\d+)""").findAll(sourcesSection).toList()
+                assertTrue("Expected at least 1 raster source for $layer/$hillshade", sourceBlockCount >= 1)
+                assertEquals("Every source in $layer/$hillshade must declare tileSize 256", sourceBlockCount, tileSizeCount)
+                assertEquals("Every source in $layer/$hillshade must declare maxzoom", sourceBlockCount, maxZoomMatches.size)
+                maxZoomMatches.forEach { match ->
+                    val z = match.groupValues[1].toInt()
+                    assertTrue("Invalid maxzoom $z in $layer/$hillshade", z in 1..22)
+                }
+            }
+        }
     }
+
+    @Test
+    fun `Scout mode banner clears when toggled off or leaving map and focusOnStand jumps camera`() =
+        runTest(testDispatcher) {
+            val entitlementRepo = FakeEntitlementRepo(SubscriptionTier.ALPHA)
+            val compassFlow = MutableStateFlow(compassReading(heading = 180.0))
+            val vm = createViewModel(entitlementRepo = entitlementRepo, compassFlow = compassFlow)
+            val job = launch { vm.uiState.collect() }
+            advanceUntilIdle()
+
+            assertTrue(vm.toggleScoutMode())
+            advanceUntilIdle()
+            assertTrue(vm.uiState.value.scoutModeEnabled)
+            assertTrue(vm.uiState.value.statusMessage.orEmpty().contains("Scout Mode active"))
+
+            assertTrue(vm.toggleScoutMode())
+            advanceUntilIdle()
+            assertFalse(vm.uiState.value.scoutModeEnabled)
+            assertNull(vm.uiState.value.statusMessage)
+
+            assertTrue(vm.toggleScoutMode())
+            advanceUntilIdle()
+            vm.onLeaveMapScreen()
+            advanceUntilIdle()
+            assertNull(vm.uiState.value.statusMessage)
+
+            val prevNonce = vm.uiState.value.camera.jumpNonce
+            vm.focusOnStand("s-1")
+            advanceUntilIdle()
+            assertEquals(41.588, vm.uiState.value.camera.latitude, 1e-4)
+            assertEquals(-93.624, vm.uiState.value.camera.longitude, 1e-4)
+            assertTrue(vm.uiState.value.camera.jumpNonce > prevNonce)
+
+            job.cancel()
+        }
+
+    @Test
+    fun `focusOnStand and projectStandScent work before uiState is collected and recenter reports waiting when no GPS fix`() =
+        runTest(testDispatcher) {
+            val entitlementRepo = FakeEntitlementRepo(SubscriptionTier.ALPHA)
+            val compassFlow = MutableStateFlow(compassReading(heading = 90.0))
+            val vm = createViewModel(
+                entitlementRepo = entitlementRepo,
+                compassFlow = compassFlow,
+                hasGpsFix = false,
+            )
+            // Allow SharingStarted.Eagerly flows (standsState / entitlementState) to receive initial emissions
+            advanceUntilIdle()
+
+            // Invoke cross-tab actions BEFORE any collector subscribes to vm.uiState
+            vm.focusOnStand("s-1")
+            assertTrue(vm.projectStandScent("s-1"))
+            vm.recenterOnUserLocation()
+
+            val job = launch { vm.uiState.collect() }
+            advanceUntilIdle()
+
+            assertEquals(41.588, vm.uiState.value.camera.latitude, 1e-4)
+            assertEquals(-93.624, vm.uiState.value.camera.longitude, 1e-4)
+            assertEquals("s-1", vm.uiState.value.projectedStandId)
+            assertTrue(vm.uiState.value.camera.jumpNonce >= 2L)
+            assertEquals("Waiting for GPS fix...", vm.uiState.value.statusMessage)
+
+            job.cancel()
+        }
 
     private fun compassReading(heading: Double): CompassReading = CompassReading(
         trueHeadingDeg = heading,
@@ -208,6 +329,7 @@ class MapViewModelTest {
         entitlementRepo: FakeEntitlementRepo,
         compassFlow: MutableStateFlow<CompassReading>,
         windFromDeg: Double = 0.0,
+        hasGpsFix: Boolean = true,
     ): MapViewModel {
         val fakeCompass = object : RotationVectorCompass() {
             override fun observeHeading(): Flow<CompassReading> = compassFlow
@@ -218,7 +340,11 @@ class MapViewModelTest {
         ) { _, _, _ -> null } as FusedLocationProviderClient
         val fakeLocationProvider = object : LocationProvider(fakeClient) {
             override fun observeLocation(mode: LocationPowerMode): Flow<LocationState> =
-                flowOf(LocationState.Fix(GeoPoint(41.5868, -93.6250), 12.0, null, 1_000L))
+                if (hasGpsFix) {
+                    flowOf(LocationState.Fix(GeoPoint(41.5868, -93.6250), 12.0, null, 1_000L))
+                } else {
+                    flowOf(LocationState.Searching)
+                }
         }
         val stand = Stand(
             id = "s-1",

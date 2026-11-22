@@ -193,9 +193,10 @@ fun OfflinePackSheet(
                                 Text(
                                     text = String.format(
                                         Locale.US,
-                                        "Z%d-%d · %d/%d res · %.1f MB · %s",
+                                        "Z%d-%d · %d tiles (%d/%d res) · %.1f MB · %s",
                                         pack.minZoom,
                                         pack.maxZoom,
+                                        pack.completedTiles,
                                         pack.completedResources,
                                         pack.requiredResources,
                                         sizeMb,

@@ -1,10 +1,12 @@
 package com.buckcast.domain.math
 
+import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
@@ -99,6 +101,22 @@ object AngleMath {
     fun toRadians(degrees: Double): Double = degrees * (PI / HALF_CIRCLE_DEG)
 
     fun toDegrees(radians: Double): Double = radians * (HALF_CIRCLE_DEG / PI)
+
+    /**
+     * Rounds [degrees] to the nearest tenth of a degree wrapped safely into `[0.0, 359.9]`
+     * so values such as `359.98°` become `0.0°` and never `360.0°` or `-0.0°`.
+     */
+    fun roundTenthsDegrees(degrees: Double): Double {
+        val norm = normalizeDegrees(degrees)
+        val tenths = Math.floorMod((norm * 10.0).roundToInt(), 3600)
+        return tenths / 10.0
+    }
+
+    /**
+     * Formats [degrees] to one decimal place strictly in `[0.0°, 359.9°]`.
+     */
+    fun formatHeadingTenths(degrees: Double): String =
+        String.format(Locale.US, "%.1f°", roundTenthsDegrees(degrees))
 }
 
 /**

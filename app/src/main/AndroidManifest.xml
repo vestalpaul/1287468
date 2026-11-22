@@ -10,7 +10,9 @@
     <application
         android:name=".BuckCastApplication"
         android:allowBackup="true"
-        android:label="BuckCast"
+        android:icon="@mipmap/ic_launcher"
+        android:label="DropTine"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
 

@@ -34,11 +34,11 @@ sealed interface LocationState {
  * Coroutine flow wrapper around [FusedLocationProviderClient] supporting high-accuracy tracking
  * and battery-saving stand-sit intervals, converting elevation & accuracy to US imperial feet.
  */
-class LocationProvider(
+open class LocationProvider(
     private val fusedClient: FusedLocationProviderClient,
 ) {
     @SuppressLint("MissingPermission")
-    fun observeLocation(mode: LocationPowerMode = LocationPowerMode.HIGH_ACCURACY): Flow<LocationState> = callbackFlow {
+    open fun observeLocation(mode: LocationPowerMode = LocationPowerMode.HIGH_ACCURACY): Flow<LocationState> = callbackFlow {
         trySend(LocationState.Searching)
 
         val intervalMs = when (mode) {

@@ -193,8 +193,28 @@ data class AppSettingsEntity(
     val legalLightBeforeSunriseMinutes: Long = 30L,
     val legalLightAfterSunsetMinutes: Long = 30L,
     val stealthModeEnabled: Boolean = false,
+    val themePreset: String = "TIMBERLINE_DARK",
     val customScorerWeightsJson: String? = null,
     val updatedAtEpochMs: Long = 0L,
+) {
+    companion object {
+        const val SINGLETON_ID = 1
+    }
+}
+
+@Serializable
+@Entity(tableName = "entitlement_cache")
+data class EntitlementCacheEntity(
+    @PrimaryKey val id: Int = SINGLETON_ID,
+    val localFirstLaunchEpochMs: Long,
+    val serverFirstSeenEpochMs: Long? = null,
+    val maxObservedEpochMs: Long,
+    val lastKnownTier: String = "SCOUT",
+    val lastKnownSource: String = "NONE",
+    val subscriptionExpiresEpochMs: Long? = null,
+    val lastVerifiedEpochMs: Long? = null,
+    val debugOverride: String = "AUTO",
+    val supportUserId: String,
 ) {
     companion object {
         const val SINGLETON_ID = 1

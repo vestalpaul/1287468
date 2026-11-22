@@ -8,7 +8,6 @@ import android.hardware.SensorManager
 import android.hardware.display.DisplayManager
 import android.view.Display
 import android.view.Surface
-import com.buckcast.domain.math.AngleMath
 import com.buckcast.domain.math.GeoPoint
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -17,21 +16,22 @@ import java.util.concurrent.atomic.AtomicReference
 
 /**
  * True-north hardware compass fusing `Sensor.TYPE_ROTATION_VECTOR` (with automatic fallback
- * to `Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR` on gyroless devices), display-rotation-aware
- * dual-posture tilt remapping, circular EMA smoothing (~20 Hz), and 10-mile cached `GeomagneticField`.
+ * to `Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR` on gyroless devices), display-rotation remapping,
+ * direct 3x3 matrix column projection (`+Y` flat vs `-Z` skyward upright aiming), circular EMA
+ * smoothing (~20 Hz), and 10-mile cached `GeomagneticField` declination.
  */
-class RotationVectorCompass(
+open class RotationVectorCompass(
     private val context: Context,
     private val sensorManager: SensorManager,
 ) {
     private val currentLocation = AtomicReference<GeoPoint?>(null)
     private val declinationCache = DeclinationCache()
 
-    fun updateLocation(point: GeoPoint?) {
+    open fun updateLocation(point: GeoPoint?) {
         currentLocation.set(point)
     }
 
-    fun observeHeading(): Flow<CompassReading> = callbackFlow {
+    open fun observeHeading(): Flow<CompassReading> = callbackFlow {
         val primarySensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
         val fallbackSensor = if (primarySensor == null) {
             sensorManager.getDefaultSensor(Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR)
@@ -64,10 +64,8 @@ class RotationVectorCompass(
         }
 
         val displayManager = context.getSystemService(DisplayManager::class.java)
-        val rotationMatrix = FloatArray(9)
+        val rawMatrix = FloatArray(9)
         val remappedMatrix = FloatArray(9)
-        val baseOrientation = FloatArray(3)
-        val finalOrientation = FloatArray(3)
 
         var currentPosture = CompassPosture.FLAT_MAP
         var smoothedTrueHeading: Double? = null
@@ -75,24 +73,25 @@ class RotationVectorCompass(
 
         val listener = object : SensorEventListener {
             override fun onSensorChanged(event: SensorEvent) {
-                SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
-                SensorManager.getOrientation(rotationMatrix, baseOrientation)
-
-                val pitchDeg = Math.toDegrees(baseOrientation[1].toDouble())
-                currentPosture = CompassFusionMath.resolvePosture(pitchDeg, currentPosture)
+                SensorManager.getRotationMatrixFromVector(rawMatrix, event.values)
 
                 val displayRotation = displayManager
                     ?.getDisplay(Display.DEFAULT_DISPLAY)
                     ?.rotation
                     ?: Surface.ROTATION_0
-                val (axisX, axisY) = CompassFusionMath.axisRemapFor(currentPosture, displayRotation)
+                val (axisX, axisY) = CompassFusionMath.displayAxisRemapFor(displayRotation)
+                SensorManager.remapCoordinateSystem(rawMatrix, axisX, axisY, remappedMatrix)
 
-                SensorManager.remapCoordinateSystem(rotationMatrix, axisX, axisY, remappedMatrix)
-                SensorManager.getOrientation(remappedMatrix, finalOrientation)
-
-                val magneticAzimuthDeg = AngleMath.normalizeDegrees(
-                    Math.toDegrees(finalOrientation[0].toDouble()),
+                val pitchDeg = CompassFusionMath.extractSkywardPitchDeg(remappedMatrix)
+                currentPosture = CompassFusionMath.resolvePostureFromSkywardZ(
+                    r7 = remappedMatrix[7].toDouble(),
+                    previousPosture = currentPosture,
                 )
+                val magneticAzimuthDeg = CompassFusionMath.extractMagneticAzimuthFromMatrix(
+                    remappedMatrix = remappedMatrix,
+                    posture = currentPosture,
+                )
+
                 val nowMs = System.currentTimeMillis()
                 val declinationDeg = declinationCache.getDeclinationDegrees(
                     location = currentLocation.get(),

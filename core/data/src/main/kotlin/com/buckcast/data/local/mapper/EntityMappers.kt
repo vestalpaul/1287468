@@ -13,6 +13,7 @@ import com.buckcast.data.local.entities.WeaponProfileEntity
 import com.buckcast.domain.math.BearingSector
 import com.buckcast.domain.math.GeoPoint
 import com.buckcast.domain.model.AppSettings
+import com.buckcast.domain.model.AppThemePreset
 import com.buckcast.domain.model.DeerClass
 import com.buckcast.domain.model.FieldLog
 import com.buckcast.domain.model.RouteType
@@ -264,6 +265,8 @@ class EntityMappers(private val json: Json) {
         legalLightBeforeSunriseMinutes = entity.legalLightBeforeSunriseMinutes,
         legalLightAfterSunsetMinutes = entity.legalLightAfterSunsetMinutes,
         stealthModeEnabled = entity.stealthModeEnabled,
+        themePreset = AppThemePreset.entries.firstOrNull { it.name == entity.themePreset }
+            ?: AppThemePreset.TIMBERLINE_DARK,
         customScorerWeights = entity.customScorerWeightsJson?.let { json.decodeFromString<Map<String, Double>>(it) },
         updatedAtEpochMs = entity.updatedAtEpochMs,
     )
@@ -276,6 +279,7 @@ class EntityMappers(private val json: Json) {
         legalLightBeforeSunriseMinutes = domain.legalLightBeforeSunriseMinutes,
         legalLightAfterSunsetMinutes = domain.legalLightAfterSunsetMinutes,
         stealthModeEnabled = domain.stealthModeEnabled,
+        themePreset = domain.themePreset.name,
         customScorerWeightsJson = domain.customScorerWeights?.let { json.encodeToString(it) },
         updatedAtEpochMs = domain.updatedAtEpochMs,
     )

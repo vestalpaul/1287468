@@ -3,6 +3,7 @@ package com.buckcast.app
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.buckcast.domain.model.CachedWeatherForecast
+import com.buckcast.domain.model.OfflineMessageFormatter
 import com.buckcast.domain.repository.SettingsRepository
 import com.buckcast.domain.repository.WeatherRepository
 import com.buckcast.sensors.BarometerReading
@@ -129,7 +130,10 @@ class DiagnosticViewModel @Inject constructor(
             settingsRepository.updateLastKnownLocation(lat, lon)
             val result = weatherRepository.refreshForecast(lat, lon)
             if (result.isFailure) {
-                errorFlow.value = result.exceptionOrNull()?.message ?: "Offline — serving cached data"
+                errorFlow.value = OfflineMessageFormatter.formatWeatherError(
+                    error = result.exceptionOrNull(),
+                    cachedAtEpochMs = uiState.value.cachedWeather?.fetchedAtEpochMs,
+                )
             }
             refreshingFlow.value = false
         }

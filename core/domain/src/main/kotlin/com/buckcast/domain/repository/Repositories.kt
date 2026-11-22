@@ -1,5 +1,7 @@
 package com.buckcast.domain.repository
 
+import com.buckcast.domain.entitlement.DebugEntitlementOverride
+import com.buckcast.domain.entitlement.EntitlementState
 import com.buckcast.domain.model.AppSettings
 import com.buckcast.domain.model.CachedWeatherForecast
 import com.buckcast.domain.model.FieldLog
@@ -58,4 +60,16 @@ interface BackupRepository {
     suspend fun exportBackupJson(): String
     suspend fun importBackupJson(json: String)
     suspend fun exportTrackGpx(sessionId: String): String
+}
+
+interface EntitlementRepository {
+    fun observeEntitlement(): Flow<EntitlementState>
+    suspend fun ensureInitialized()
+    suspend fun refreshEntitlements(): Result<EntitlementState>
+    suspend fun restorePurchases(): Result<EntitlementState>
+    suspend fun logInWithAccessCode(code: String): Result<EntitlementState>
+    suspend fun purchaseAlpha(isAnnual: Boolean): Result<EntitlementState>
+    suspend fun getSupportUserId(): String
+    suspend fun setDebugOverride(override: DebugEntitlementOverride)
+    suspend fun reset36HourPreview()
 }

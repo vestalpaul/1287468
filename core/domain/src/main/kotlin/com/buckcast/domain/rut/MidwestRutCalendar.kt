@@ -6,12 +6,12 @@ import java.time.MonthDay
 import java.time.temporal.ChronoUnit
 
 /**
- * The 13 official Midwest whitetail season phases pairing Drury Outdoors THIRTEEN names
- * with biological behavioral stages, anchored to Lock Down start (`peakRutDate`, default Nov 11).
+ * The 13 DropTine Midwest whitetail season phases pairing original tactical phase names
+ * with biological behavioral stages, anchored to Breeding Lockdown start (`peakRutDate`, default Nov 11).
  */
 enum class RutPhase(
     val number: Int,
-    val druryName: String,
+    val phaseName: String,
     val biologicalName: String,
     val startOffsetDays: Int,
     val endOffsetDays: Int,
@@ -19,9 +19,9 @@ enum class RutPhase(
     val pmBaselineScore: Double,
     val tacticalFocus: String,
 ) {
-    PHASE_01_A_NEW_BEGINNING(
+    PHASE_01_VELVET_BREAKUP(
         number = 1,
-        druryName = "A New Beginning",
+        phaseName = "Velvet Breakup",
         biologicalName = "Velvet Shed & Bachelor Breakup",
         startOffsetDays = -57,
         endOffsetDays = -48,
@@ -29,9 +29,9 @@ enum class RutPhase(
         pmBaselineScore = 56.0,
         tacticalFocus = "Evening destination food sources and low-impact observation sets.",
     ),
-    PHASE_02_GREENER_PASTURES(
+    PHASE_02_EARLY_FEED(
         number = 2,
-        druryName = "Greener Pastures",
+        phaseName = "Early Feed",
         biologicalName = "Early-Season Food Patterning",
         startOffsetDays = -47,
         endOffsetDays = -33,
@@ -39,9 +39,9 @@ enum class RutPhase(
         pmBaselineScore = 68.0,
         tacticalFocus = "Primary green plots, alfalfa/beans, and acorn transitions on cool evenings.",
     ),
-    PHASE_03_THE_OCTOBER_LULL(
+    PHASE_03_OCTOBER_SHIFT(
         number = 3,
-        druryName = "The October Lull",
+        phaseName = "October Shift",
         biologicalName = "Mid-October Range Shift & Mast Focus",
         startOffsetDays = -32,
         endOffsetDays = -18,
@@ -49,9 +49,9 @@ enum class RutPhase(
         pmBaselineScore = 45.0,
         tacticalFocus = "Staging areas near hard mast and bedding edges on cold-front evenings.",
     ),
-    PHASE_04_PRE_LOCK(
+    PHASE_04_SCRAPE_SURGE(
         number = 4,
-        druryName = "Pre-Lock",
+        phaseName = "Scrape Surge",
         biologicalName = "Pre-Rut Scrape Activity & Testosterone Surge",
         startOffsetDays = -17,
         endOffsetDays = -11,
@@ -59,9 +59,9 @@ enum class RutPhase(
         pmBaselineScore = 78.0,
         tacticalFocus = "Active scrape lines, staging rubs, and timber corridors near doe bedding.",
     ),
-    PHASE_05_HIGH_ANTICIPATION(
+    PHASE_05_CRUISING_WINDOW(
         number = 5,
-        druryName = "High Anticipation",
+        phaseName = "Cruising Window",
         biologicalName = "Seeking Phase (Early Estrus Search)",
         startOffsetDays = -10,
         endOffsetDays = -6,
@@ -69,9 +69,9 @@ enum class RutPhase(
         pmBaselineScore = 88.0,
         tacticalFocus = "Dawn downwind edges of doe bedding and mid-morning pinch points.",
     ),
-    PHASE_06_BUCK_PARADE(
+    PHASE_06_PEAK_CHASE(
         number = 6,
-        druryName = "Buck Parade",
+        phaseName = "Peak Chase",
         biologicalName = "Peak Rut — Cruising & Chasing",
         startOffsetDays = -5,
         endOffsetDays = -1,
@@ -79,9 +79,9 @@ enum class RutPhase(
         pmBaselineScore = 98.0,
         tacticalFocus = "All-day rut funnels, creek crossings, and saddle travel corridors.",
     ),
-    PHASE_07_LOCK_DOWN(
+    PHASE_07_BREEDING_LOCKDOWN(
         number = 7,
-        druryName = "Lock Down",
+        phaseName = "Breeding Lockdown",
         biologicalName = "Peak Breeding — Doe Tending & Lockdown",
         startOffsetDays = 0,
         endOffsetDays = 3,
@@ -89,9 +89,9 @@ enum class RutPhase(
         pmBaselineScore = 62.0,
         tacticalFocus = "Thick thermal cover, remote ditches, and midday cruising checks between doe pockets.",
     ),
-    PHASE_08_DESPERATELY_SEEKING(
+    PHASE_08_SECOND_WIND(
         number = 8,
-        druryName = "Desperately Seeking",
+        phaseName = "Second Wind",
         biologicalName = "Late-Rut Secondary Seeking & Cruising",
         startOffsetDays = 4,
         endOffsetDays = 8,
@@ -99,9 +99,9 @@ enum class RutPhase(
         pmBaselineScore = 80.0,
         tacticalFocus = "Bucks break lockdown searching remaining unbred does along travel corridors.",
     ),
-    PHASE_09_PARTYS_OVER(
+    PHASE_09_POST_RUT_CRASH(
         number = 9,
-        druryName = "Party's Over",
+        phaseName = "Post-Rut Crash",
         biologicalName = "Post-Rut Recovery & Exhaustion Lull",
         startOffsetDays = 9,
         endOffsetDays = 14,
@@ -109,9 +109,9 @@ enum class RutPhase(
         pmBaselineScore = 44.0,
         tacticalFocus = "Target sheltered south-facing bedding cover and late afternoon food recovery.",
     ),
-    PHASE_10_GREEN_REVISITED(
+    PHASE_10_SECONDARY_ESTRUS(
         number = 10,
-        druryName = "Green Revisited",
+        phaseName = "Secondary Estrus",
         biologicalName = "Secondary Rut (Fawn Estrus) & Food Return",
         startOffsetDays = 15,
         endOffsetDays = 23,
@@ -119,9 +119,9 @@ enum class RutPhase(
         pmBaselineScore = 72.0,
         tacticalFocus = "Evening green plots and standing grain drawing doe groups and secondary cruisers.",
     ),
-    PHASE_11_WAITING_ON_A_FRONT(
+    PHASE_11_COLD_FRONT_FEED(
         number = 11,
-        druryName = "Waiting on a Front",
+        phaseName = "Cold-Front Feed",
         biologicalName = "Early Winter Cold-Front Feeding",
         startOffsetDays = 24,
         endOffsetDays = 30,
@@ -129,9 +129,9 @@ enum class RutPhase(
         pmBaselineScore = 70.0,
         tacticalFocus = "Strike aggressively on sharp temperature drops and rising post-front pressure.",
     ),
-    PHASE_12_FEEDBACK(
+    PHASE_12_WINTER_RECOVERY(
         number = 12,
-        druryName = "Feedback",
+        phaseName = "Winter Recovery",
         biologicalName = "Mid-Winter Caloric Recovery",
         startOffsetDays = 31,
         endOffsetDays = 40,
@@ -139,9 +139,9 @@ enum class RutPhase(
         pmBaselineScore = 76.0,
         tacticalFocus = "High-calorie winter food sources on afternoon thermal-slope sits.",
     ),
-    PHASE_13_THE_GRAND_FINALE(
+    PHASE_13_LATE_SEASON_CONCENTRATE(
         number = 13,
-        druryName = "The Grand Finale",
+        phaseName = "Late-Season Concentrate",
         biologicalName = "Late-Winter Food-Source Concentration",
         startOffsetDays = 41,
         endOffsetDays = 65,
@@ -198,13 +198,12 @@ object MidwestRutCalendar {
             "lateSeasonEndOffsetDays must be in $DEFAULT_LATE_SEASON_END_OFFSET_DAYS..$MAX_LATE_SEASON_END_OFFSET_DAYS, was: $lateSeasonEndOffsetDays"
         }
 
-        // Check adjacent season anchor years to resolve Dec -> Jan cross-year seasons cleanly.
         val candidateYears = listOf(date.year - 1, date.year, date.year + 1)
         for (year in candidateYears) {
             val peakDate = resolvePeakDateForYear(year, peakRutDate)
             val offset = ChronoUnit.DAYS.between(peakDate, date).toInt()
             if (offset in SEASON_START_OFFSET_DAYS..lateSeasonEndOffsetDays) {
-                val phase = resolvePhaseForOffset(offset, lateSeasonEndOffsetDays)
+                val phase = resolvePhaseForOffset(offset)
                 val effectiveEndOffset = effectiveEndOffset(phase, lateSeasonEndOffsetDays)
                 val startDate = peakDate.plusDays(phase.startOffsetDays.toLong())
                 val endDate = peakDate.plusDays(effectiveEndOffset.toLong())
@@ -252,7 +251,7 @@ object MidwestRutCalendar {
             phaseTotalDays = null,
             phaseStartDate = null,
             phaseEndDate = null,
-            nextPhase = RutPhase.PHASE_01_A_NEW_BEGINNING,
+            nextPhase = RutPhase.PHASE_01_VELVET_BREAKUP,
             daysUntilNextPhase = daysUntilStart,
             amBaselineScore = OFF_SEASON_BASELINE_SCORE,
             pmBaselineScore = OFF_SEASON_BASELINE_SCORE,
@@ -267,12 +266,10 @@ object MidwestRutCalendar {
         }
     }
 
-    private fun resolvePhaseForOffset(offsetDays: Int, lateSeasonEndOffsetDays: Int): RutPhase =
-        RutPhase.entries.first { phase ->
-            val end = effectiveEndOffset(phase, lateSeasonEndOffsetDays)
-            offsetDays in phase.startOffsetDays..end
-        }
+    private fun resolvePhaseForOffset(offsetDays: Int): RutPhase =
+        RutPhase.entries.lastOrNull { offsetDays >= it.startOffsetDays }
+            ?: RutPhase.PHASE_01_VELVET_BREAKUP
 
     private fun effectiveEndOffset(phase: RutPhase, lateSeasonEndOffsetDays: Int): Int =
-        if (phase == RutPhase.PHASE_13_THE_GRAND_FINALE) lateSeasonEndOffsetDays else phase.endOffsetDays
+        if (phase == RutPhase.PHASE_13_LATE_SEASON_CONCENTRATE) lateSeasonEndOffsetDays else phase.endOffsetDays
 }

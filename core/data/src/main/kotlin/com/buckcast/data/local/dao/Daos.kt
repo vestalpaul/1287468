@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import com.buckcast.data.local.entities.AppSettingsEntity
+import com.buckcast.data.local.entities.EntitlementCacheEntity
 import com.buckcast.data.local.entities.FieldLogEntity
 import com.buckcast.data.local.entities.SightingEntity
 import com.buckcast.data.local.entities.StandEntity
@@ -216,4 +217,16 @@ interface AppSettingsDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(settings: AppSettingsEntity)
+}
+
+@Dao
+interface EntitlementCacheDao {
+    @Query("SELECT * FROM entitlement_cache WHERE id = ${EntitlementCacheEntity.SINGLETON_ID} LIMIT 1")
+    fun observeCache(): Flow<EntitlementCacheEntity?>
+
+    @Query("SELECT * FROM entitlement_cache WHERE id = ${EntitlementCacheEntity.SINGLETON_ID} LIMIT 1")
+    suspend fun getCacheOnce(): EntitlementCacheEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(entity: EntitlementCacheEntity)
 }

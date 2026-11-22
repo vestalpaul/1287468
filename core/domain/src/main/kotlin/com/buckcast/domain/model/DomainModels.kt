@@ -203,6 +203,24 @@ data class WeaponProfile(
     val dropTable: List<WeaponDropEntry>,
 )
 
+enum class AppThemePreset(
+    val displayName: String,
+    val description: String,
+    val isAlphaOnly: Boolean,
+) {
+    TIMBERLINE_DARK("Timberline Dark", "Deep pine-charcoal & warm brass", isAlphaOnly = false),
+    TOPO_DAYLIGHT("Topo Daylight", "High-contrast topographic parchment", isAlphaOnly = true),
+    STEALTH_CRIMSON("Stealth Crimson", "Pure OLED black & red night-vision", isAlphaOnly = true),
+    BLAZE_SLATE("Blaze Slate", "Matte slate & hunter blaze orange", isAlphaOnly = true),
+    MATERIAL_YOU("Material You", "Dynamic wallpaper palette (Android 12+)", isAlphaOnly = true),
+}
+
+data class AppRuntimeConfig(
+    val isDebugBuild: Boolean,
+    val revenueCatPublicKey: String,
+    val mapTilerApiKey: String,
+)
+
 data class AppSettings(
     val lastKnownLat: Double? = null,
     val lastKnownLon: Double? = null,
@@ -210,6 +228,7 @@ data class AppSettings(
     val legalLightBeforeSunriseMinutes: Long = 30L,
     val legalLightAfterSunsetMinutes: Long = 30L,
     val stealthModeEnabled: Boolean = false,
+    val themePreset: AppThemePreset = AppThemePreset.TIMBERLINE_DARK,
     val customScorerWeights: Map<String, Double>? = null,
     val updatedAtEpochMs: Long = 0L,
 )

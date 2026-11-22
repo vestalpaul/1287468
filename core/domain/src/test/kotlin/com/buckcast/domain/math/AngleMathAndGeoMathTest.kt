@@ -49,6 +49,15 @@ class AngleMathAndGeoMathTest {
     }
 
     @Test
+    fun `roundTenthsDegrees and formatHeadingTenths never emit 360_0 or negative zero`() {
+        assertEquals(0.0, AngleMath.roundTenthsDegrees(359.98), 1e-9)
+        assertEquals("0.0°", AngleMath.formatHeadingTenths(359.98))
+        assertEquals("0.0°", AngleMath.formatHeadingTenths(-0.01))
+        assertEquals("359.9°", AngleMath.formatHeadingTenths(359.94))
+        assertEquals("45.3°", AngleMath.formatHeadingTenths(45.26))
+    }
+
+    @Test
     fun `circularEmaSmooth steps across north seam without whipping through 180`() {
         val smoothedClockwise = AngleMath.circularEmaSmooth(previousDeg = 355.0, rawDeg = 5.0, alpha = 0.25)
         assertEquals(357.5, smoothedClockwise, 1e-9)

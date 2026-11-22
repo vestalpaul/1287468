@@ -9,7 +9,9 @@ import com.buckcast.domain.math.GeoPoint
 import com.buckcast.domain.math.GeoUnits
 import com.buckcast.domain.wind.WindAlignmentBadge
 import com.buckcast.domain.wind.WindAlignmentClassifier
-import kotlin.math.abs
+import kotlin.math.asin
+import kotlin.math.atan2
+import kotlin.math.sin
 
 enum class CompassPosture {
     FLAT_MAP,
@@ -41,44 +43,72 @@ data class CompassReading(
 )
 
 /**
- * Pure sensor-fusion math enforcing dual-posture remapping, circular EMA smoothing,
- * 5° posture/alignment hysteresis, `[0.0, 360.0)` normalization, and 10-mile declination caching.
+ * Pure sensor-fusion math using direct 3x3 display-remapped rotation-matrix column projection,
+ * skyward-only posture hysteresis (`R[7] > sin(55°)`), circular EMA smoothing, `[0.0, 360.0)`
+ * normalization, safe tenths rounding, and 10-mile magnetic declination caching.
  */
 object CompassFusionMath {
 
     const val UPRIGHT_ENTER_PITCH_DEG = 55.0
-    const val UPRIGHT_EXIT_PITCH_DEG = 50.0 // 5° posture hysteresis
+    const val UPRIGHT_EXIT_PITCH_DEG = 50.0
     const val DEFAULT_EMA_ALPHA = 0.20
 
-    fun resolvePosture(
-        pitchDeg: Double,
+    private val UPRIGHT_ENTER_SIN = sin(AngleMath.toRadians(UPRIGHT_ENTER_PITCH_DEG))
+    private val UPRIGHT_EXIT_SIN = sin(AngleMath.toRadians(UPRIGHT_EXIT_PITCH_DEG))
+
+    /**
+     * Resolves device posture strictly from skyward tilt component `R[7]` (world Z of screen `+Y` edge)
+     * with 5° hysteresis. Nose-down tilts (`r7 < 0`) never enter `UPRIGHT_AIMING`.
+     */
+    fun resolvePostureFromSkywardZ(
+        r7: Double,
         previousPosture: CompassPosture,
     ): CompassPosture {
-        val absPitch = abs(pitchDeg)
+        require(r7.isFinite()) { "r7 must be finite: $r7" }
         return when (previousPosture) {
             CompassPosture.FLAT_MAP ->
-                if (absPitch > UPRIGHT_ENTER_PITCH_DEG) CompassPosture.UPRIGHT_AIMING else CompassPosture.FLAT_MAP
+                if (r7 > UPRIGHT_ENTER_SIN) CompassPosture.UPRIGHT_AIMING else CompassPosture.FLAT_MAP
             CompassPosture.UPRIGHT_AIMING ->
-                if (absPitch < UPRIGHT_EXIT_PITCH_DEG) CompassPosture.FLAT_MAP else CompassPosture.UPRIGHT_AIMING
+                if (r7 < UPRIGHT_EXIT_SIN) CompassPosture.FLAT_MAP else CompassPosture.UPRIGHT_AIMING
         }
     }
 
-    fun axisRemapFor(
+    /**
+     * Extracts signed skyward pitch angle in `[-90, 90]` degrees (`+` top edge skyward, `-` nose down).
+     */
+    fun extractSkywardPitchDeg(remappedMatrix: FloatArray): Double {
+        require(remappedMatrix.size >= 9) { "Expected 3x3 rotation matrix" }
+        return AngleMath.toDegrees(asin(remappedMatrix[7].toDouble().coerceIn(-1.0, 1.0)))
+    }
+
+    /**
+     * Projects the active aiming axis directly from a display-rotation-remapped 3x3 world rotation matrix:
+     * - `FLAT_MAP`: projects device `+Y` top edge (`atan2(R[1], R[4])`).
+     * - `UPRIGHT_AIMING`: projects rear camera `-Z` axis (`atan2(-R[2], -R[5])`).
+     */
+    fun extractMagneticAzimuthFromMatrix(
+        remappedMatrix: FloatArray,
         posture: CompassPosture,
-        displayRotation: Int,
-    ): Pair<Int, Int> = when (posture) {
-        CompassPosture.FLAT_MAP -> when (displayRotation) {
-            Surface.ROTATION_90 -> SensorManager.AXIS_Y to SensorManager.AXIS_MINUS_X
-            Surface.ROTATION_180 -> SensorManager.AXIS_MINUS_X to SensorManager.AXIS_MINUS_Y
-            Surface.ROTATION_270 -> SensorManager.AXIS_MINUS_Y to SensorManager.AXIS_X
-            else -> SensorManager.AXIS_X to SensorManager.AXIS_Y
+    ): Double {
+        require(remappedMatrix.size >= 9) { "Expected 3x3 rotation matrix" }
+        val rad = when (posture) {
+            CompassPosture.FLAT_MAP ->
+                atan2(remappedMatrix[1].toDouble(), remappedMatrix[4].toDouble())
+            CompassPosture.UPRIGHT_AIMING ->
+                atan2(-remappedMatrix[2].toDouble(), -remappedMatrix[5].toDouble())
         }
-        CompassPosture.UPRIGHT_AIMING -> when (displayRotation) {
-            Surface.ROTATION_90 -> SensorManager.AXIS_Z to SensorManager.AXIS_MINUS_X
-            Surface.ROTATION_180 -> SensorManager.AXIS_MINUS_X to SensorManager.AXIS_MINUS_Z
-            Surface.ROTATION_270 -> SensorManager.AXIS_MINUS_Z to SensorManager.AXIS_X
-            else -> SensorManager.AXIS_X to SensorManager.AXIS_Z
-        }
+        return AngleMath.normalizeDegrees(AngleMath.toDegrees(rad))
+    }
+
+    /**
+     * Returns `(axisX, axisY)` for `SensorManager.remapCoordinateSystem` aligning raw sensor coordinates
+     * with the current UI screen display rotation.
+     */
+    fun displayAxisRemapFor(displayRotation: Int): Pair<Int, Int> = when (displayRotation) {
+        Surface.ROTATION_90 -> SensorManager.AXIS_Y to SensorManager.AXIS_MINUS_X
+        Surface.ROTATION_180 -> SensorManager.AXIS_MINUS_X to SensorManager.AXIS_MINUS_Y
+        Surface.ROTATION_270 -> SensorManager.AXIS_MINUS_Y to SensorManager.AXIS_X
+        else -> SensorManager.AXIS_X to SensorManager.AXIS_Y
     }
 
     fun computeTrueHeading(
@@ -94,6 +124,8 @@ object CompassFusionMath {
             AngleMath.circularEmaSmooth(previousSmoothedDeg, rawTrue, emaAlpha)
         }
     }
+
+    fun formatHeadingTenths(degrees: Double): String = AngleMath.formatHeadingTenths(degrees)
 
     fun mapAccuracy(sensorAccuracy: Int): CompassAccuracy = when (sensorAccuracy) {
         SensorManager.SENSOR_STATUS_ACCURACY_HIGH -> CompassAccuracy.HIGH

@@ -22,7 +22,7 @@ data class BarometerReading(
 
 /**
  * Pure barometric math converting raw Android station hPa to sea-level reduced inHg
- * when GPS altitude is known, plus tracking rolling local pressure trend deltas.
+ * when GPS altitude is known.
  */
 object BarometerMath {
 
@@ -66,17 +66,53 @@ class LocalPressureTrendTracker(
             null
         }
     }
+
+    @Synchronized
+    fun reset() {
+        history.clear()
+    }
+}
+
+/**
+ * Enforces strict MSL-to-MSL pressure trend computation, resetting the baseline cleanly whenever
+ * GPS altitude lock state changes so raw station readings never contaminate sea-level trends.
+ */
+class SeaLevelPressureTrendEvaluator(
+    private val tracker: LocalPressureTrendTracker = LocalPressureTrendTracker(),
+) {
+    private var lastWasMsl: Boolean? = null
+
+    @Synchronized
+    fun record(
+        timestampMs: Long,
+        seaLevelPressureInHg: Double,
+        isSeaLevelCorrected: Boolean,
+    ): Double? {
+        if (!isSeaLevelCorrected) {
+            if (lastWasMsl == true) {
+                tracker.reset()
+            }
+            lastWasMsl = false
+            return null
+        }
+
+        if (lastWasMsl != true) {
+            tracker.reset()
+            lastWasMsl = true
+        }
+        return tracker.recordAndComputeTrend(timestampMs, seaLevelPressureInHg)
+    }
 }
 
 /**
  * Optional `Sensor.TYPE_PRESSURE` reader that reports availability gracefully on devices
- * lacking a barometric chip and reduces station pressure to sea-level `inHg` using GPS altitude.
+ * lacking a barometric chip and computes MSL-to-MSL `inHg` trend once GPS altitude is locked.
  */
 class BarometerSensor(
     private val sensorManager: SensorManager,
 ) {
     private val currentAltitudeFeet = AtomicReference<Double?>(null)
-    private val trendTracker = LocalPressureTrendTracker()
+    private val trendEvaluator = SeaLevelPressureTrendEvaluator()
 
     fun updateAltitudeFeet(altitudeFeet: Double?) {
         currentAltitudeFeet.set(altitudeFeet)
@@ -110,7 +146,7 @@ class BarometerSensor(
                     altitudeFeet = currentAltitudeFeet.get(),
                 )
                 val nowMs = System.currentTimeMillis()
-                val trend = trendTracker.recordAndComputeTrend(nowMs, seaLevelInHg)
+                val trend = trendEvaluator.record(nowMs, seaLevelInHg, corrected)
 
                 trySend(
                     BarometerReading(

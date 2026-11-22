@@ -246,7 +246,7 @@ object MovementScorer {
         val summary = if (phase == null) {
             "Off-Season"
         } else {
-            "Phase ${phase.number}: ${phase.druryName} (${phase.biologicalName})"
+            "Phase ${phase.number}: ${phase.phaseName} (${phase.biologicalName})"
         }
         val reason = phase?.tacticalFocus ?: "Outside active Midwest rut calendar window"
         return buildBreakdown(MovementFactor.RUT_PHASE, raw, summary, reason)

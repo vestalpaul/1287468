@@ -45,7 +45,7 @@ dependencies {
     implementation(project(":core:domain"))
 
     implementation(libs.kotlinx.coroutines.android)
-    implementation(libs.play.services.location)
+    api(libs.play.services.location)
 
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)

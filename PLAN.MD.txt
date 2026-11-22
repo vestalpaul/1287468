@@ -1,0 +1,127 @@
+# DropTine — Phase 3 Commercial Build Plan
+
+## Core Rules & Build Environment
+- Follow `.agent/rules/01-android-architecture.md` and `.agent/rules/02-sensor-and-geo-math.md`.
+- Keep `:core:domain` 100% pure Kotlin JVM (zero `android.*` or `androidx.*` imports).
+- Use `$env:JAVA_HOME = "C:\Users\vesta\.gradle\jdks\eclipse_adoptium-17-amd64-windows.2"` when running `.\gradlew.bat`.
+- Check off each item (`- [x]`) only after its code compiles and unit tests pass.
+
+---
+
+## Step 0: Patch Hardware Sensor & Inset Findings (`:core:sensors` & `:app`)
+- [x] **Fix `UPRIGHT_AIMING` Azimuth Projection** (`RotationVectorCompass.kt` & `CompassFusionMath.kt`):
+  - Replace chained `remapCoordinateSystem` + Euler `getOrientation()` azimuth with direct 3x3 world rotation-matrix column projection (after display-rotation remapping):
+    - `FLAT_MAP`: `azimuthRad = atan2(R[1], R[4])` (projects device `+Y` top edge onto East/North).
+    - `UPRIGHT_AIMING`: `azimuthRad = atan2(-R[2], -R[5])` (projects device `-Z` rear camera onto East/North).
+  - Trigger `UPRIGHT_AIMING` only when the top edge tilts skyward (`R[7] > sin(55°)` with 5° hysteresis), NOT `|pitch| > 55°`, so nose-down tilts never invert the heading.
+  - Add JUnit tests in `CompassAndBarometerMathTest.kt` constructing 3D rotation matrices for headings `0°`, `90°`, `215°`, and `330°` pitched from `0°` through `55°` to `85°` skyward, asserting `< 0.5°` continuity across the posture switch.
+- [x] **Fix `BarometerSensor` Trend Datum** (`BarometerSensor.kt`):
+  - Compute `pressureTrendInHg` strictly **MSL-to-MSL** (never subtracting a raw station baseline from live MSL). Reset the rolling trend baseline cleanly if GPS altitude lock changes state.
+  - Add a unit test verifying `0.00 inHg` trend under constant sea-level pressure across an 80 ft elevation change.
+- [x] **Fix `360.0°` Display Rounding** (`AngleMath.kt` / `CompassFusionMath.kt`):
+  - Format tenth-degree headings via `Math.floorMod((normalizeDegrees(deg) * 10.0).roundToInt(), 3600) / 10.0` so values like `359.98°` render as `0.0°` and never `360.0°` or `-0.0°`.
+- [x] **Edge-to-Edge Window Insets & Friendly Offline Errors**:
+  - Apply Material 3 `Scaffold` + `WindowInsets.safeDrawing` (`statusBarsPadding()` / `navigationBarsPadding()`) across all screens so headers never collide with system bars.
+  - Map `UnknownHostException` / `IOException` to clean user-facing offline messages (e.g., `"Offline — showing cached forecast from HH:mm"`).
+
+---
+
+## Phase 3A: DropTine Commercial Rebrand, Adaptive Icon & Material 3 Multi-Theme Engine
+- [ ] **Brand Identity & Play Store IP Hygiene (`:app`, `:core:domain`)**:
+  - Update app display name to `"DropTine"` and `applicationId` to `"com.droptine.app"` in `app/build.gradle.kts` (preserving existing internal Kotlin package structure to avoid unnecessary churn).
+  - Replace Drury Outdoors trademarked phase names in `MidwestRutCalendar.kt` (and update `MidwestRutCalendarTest.kt`) with original tactical whitetail phase names while preserving the exact Nov 11 peak-anchored 13-phase biological offsets:
+    1. Velvet Breakup (`-57..-48`)
+    2. Early Feed (`-47..-33`)
+    3. October Shift (`-32..-18`)
+    4. Scrape Surge (`-17..-11`)
+    5. Cruising Window (`-10..-6`)
+    6. Peak Chase (`-5..-1`)
+    7. Breeding Lockdown (`0..+3`)
+    8. Second Wind (`+4..+8`)
+    9. Post-Rut Crash (`+9..+14`)
+    10. Secondary Estrus (`+15..+23`)
+    11. Cold-Front Feed (`+24..+30`)
+    12. Winter Recovery (`+31..+40`)
+    13. Late-Season Concentrate (`+41..+65`, extendable to `+81`)
+- [ ] **DropTine Compass Bezel Adaptive Icon (`:app/src/main/res/`)**:
+  - Author clean Android Vector Drawables for `ic_launcher_foreground.xml`, `ic_launcher_background.xml`, and `ic_launcher_monochrome.xml` depicting a geometric European whitetail skull with a signature drop-tine rack framed inside a crisp tactical compass degree bezel with a highlighted North/wind needle.
+- [ ] **Material 3 Multi-Theme System (`:app`, `:core:domain`, `:core:data`)**:
+  - Add `AppThemePreset` enum to `:core:domain` and persist selection in Room `AppSettingsEntity` (with a clean Room schema v1 -> v2 migration keeping existing data intact and exporting `2.json`):
+    1. `TIMBERLINE_DARK` *(Scout Free Default)* — Deep pine-charcoal `#0D120F` surface, sage/moss `#7EA874` primary, warm brass `#D6A456` tertiary.
+    2. `TOPO_DAYLIGHT` *(Alpha)* — Topographic parchment `#F3F2EC` surface, deep forest `#2B4A35` primary, terracotta `#B8522A` tertiary.
+    3. `STEALTH_CRIMSON` *(Alpha)* — Pure `#000000` OLED black surface, deep crimson `#C62828` / `#EF5350` accents for pre-dawn night-vision preservation.
+    4. `BLAZE_SLATE` *(Alpha)* — Matte slate `#111418` surface, hunter blaze `#E65100` primary, steel-blue `#5C85A6` secondary.
+    5. `MATERIAL_YOU` *(Alpha, Android 12+)* — `dynamicDarkColorScheme` / `dynamicLightColorScheme` with graceful fallback to `TIMBERLINE_DARK` on Android 8–11.
+  - Build a Material 3 `NavigationBar` shell with 4 tabs (`HOME`, `MAP`, `TRACK`, `SETTINGS`), tonal active pill indicators, and clean Phase 4 placeholder for `TRACK`.
+
+---
+
+## Phase 3B: DropTine Alpha Entitlement Engine, 36-Hour Welcome Preview & VIP Comp System (`:core:domain`, `:core:data`, `:feature:settings`)
+- [ ] **Pure-Domain Tier, 36-Hour Preview & Feature Gate (`:core:domain`)**:
+  - Create `SubscriptionTier` (`SCOUT`, `ALPHA`), `EntitlementSource` (`NONE`, `ALPHA_PREVIEW_36H`, `PLAY_SUBSCRIPTION`, `PROMO_COMP`, `DEBUG_OVERRIDE`), `AlphaFeature` enum (7-day forecast, 5-factor breakdown, hourly table, Satellite/Hybrid/Hillshade layers, offline map packs, 300-yd scent/thermal cones, unlimited stands/waypoints, stand wind-match & freshness, route auditor, ballistic yardage, blood-trail tracker, premium themes), and `EntitlementState(tier, source, previewStartedEpochMs, previewExpiresEpochMs, subscriptionExpiresEpochMs, lastVerifiedEpochMs, isOfflineGraceActive, remainingPreviewMs)`.
+  - Implement pure-Kotlin `EntitlementEvaluator`:
+    - **Priority order**: `DEBUG_OVERRIDE` (debug only) -> active `PLAY_SUBSCRIPTION` / `PROMO_COMP` (with **14-day offline grace window**) -> active **36-hour `ALPHA_PREVIEW_36H`** (`36 * 3600 * 1000L` ms from `effectiveStart = min(localFirstLaunch, serverFirstSeen)`) -> `SCOUT`.
+    - **Anti-rollback guard**: Track `maxObservedEpochMs`; if `now < maxObservedEpochMs - 5_minutes`, evaluate remaining preview against `maxObservedEpochMs` so rolling the device clock backward cannot extend the 36-hour window.
+- [ ] **RevenueCat + Play Billing Adapter (`:core:data`)**:
+  - Add `com.revenuecat.purchases:purchases` behind `EntitlementRepository` (`Flow<EntitlementState>`) backed by Room `EntitlementCacheEntity` (in DB v2, storing `firstLaunchEpochMs`, `maxObservedEpochMs`, `lastKnownTier`, `source`, `expiresAtEpochMs`, `lastVerifiedEpochMs`).
+  - Initialize `firstLaunchEpochMs` atomically on first app open so every new user immediately starts their 36-hour **DropTine Alpha** preview with zero credit card friction, and automatically transitions to **Scout** when the 36 hours elapse (emitting a non-destructive lockback that preserves user stands/data and gracefully reverts Alpha-only themes to `TIMBERLINE_DARK` and map layers to USGS Topo).
+  - Support a clean placeholder/build-config RevenueCat public key so debug builds run cleanly before Play Console SKUs are live.
+  - **VIP / Comp Access & Reviewer Support**:
+    - Expose the user's RevenueCat `appUserID` as a copyable **DropTine Support ID** in `Settings` (allows instant 1-click free Alpha grants for any chosen person via RevenueCat Promotional Entitlements).
+    - Add an **Enter Access Code** dialog in `Settings` that calls `Purchases.logIn(code)` + refreshes entitlements (supports Play Store reviewers and VIP passes).
+    - Include a **Debug-Only Entitlement Switcher** (`BuildConfig.DEBUG`) in `Settings` (`AUTO`, `FORCE_ALPHA`, `FORCE_SCOUT`, `RESET_36H_PREVIEW`, `EXPIRE_36H_PREVIEW`) to test the full preview -> Scout lockback flow on hardware immediately.
+- [ ] **Material 3 Alpha Paywall Sheet & Settings Screen (`:feature:settings`)**:
+  - Build a Material 3 `ModalBottomSheet` paywall highlighting **DropTine Alpha** (`$1.99/mo` or `$14.99/yr`, Restore Purchases, Manage Subscription link, and clear remaining preview banner if opened during the 36-hour window).
+  - Build the `Settings` screen with: Theme Picker (preview swatches; Alpha themes unlocked during 36h preview or Alpha sub, locked on Scout), Subscription / Preview Countdown card & copyable Support ID, Access Code entry, Rut Peak Date calibration, Legal Shooting Light offset, and Debug Entitlement Switcher (debug builds only).
+
+---
+
+## Phase 3C: Material 3 Home Dashboard (`:feature:forecast`)
+- [ ] **Distinct Material 3 Layout (Not a DeerCast Clone)**:
+  - Top App Bar with active location chip, manual refresh button, clean offline cache indicator, and a subtle `Alpha Preview · XXh left` pill when in the 36-hour welcome window (tapping opens the Alpha upgrade sheet).
+  - **Hero Today Card** (`ElevatedCard`): Current temp (`°F`), wind (`dir @ mph`), pressure (`inHg`) + trend arrow, AM/PM rating chips (`SLOW` / `OKAY` / `GOOD` / `GREAT`), current Whitetail Phase, Moon Phase, and **Custom Compose `Canvas` Dual Sun & Moon Arcs** plotting Sunrise/Sunset, Civil Twilight (`-6°`), Legal Shooting Light (`-30m / +30m`), and Moonrise/Moonset.
+  - **7-Day Outlook Strip + View Toggle** (`SingleChoiceSegmentedButtonRow` for `Cards` / `Timeline`):
+    - **Scout (Free after 36h)**: Today unlocked; Days 2–7 show locked Alpha preview cards opening the Alpha Paywall sheet on tap.
+    - **Alpha (or 36h Preview)**: All 7 days unlocked.
+  - **Movement Intel Sheet (`ModalBottomSheet`)**:
+    - **Alpha-gated**: Transparent 5-factor AM/PM movement breakdown (Baro/Trend 25%, Temp vs 7d Mean 25%, Rut 20%, Wind 15%, Precip 15% with exact weighted points and reasons), complete shooting-light schedule, and 4 AM–9 PM hourly table.
+  - **My Stands Strip & Mini-Map Card**:
+    - Shows stand wind-match sorted by best wind (`Now`, `Today AM`, `Today PM`, `Tomorrow AM`, `Tomorrow PM`) + `StandFreshness` badge (Alpha-gated beyond 1 basic stand preview on Scout), plus a quick-jump card to `MAP`.
+
+---
+
+## Phase 3D: Offline MapLibre Tactical Map (`:feature:map`) & Stand Management (`:feature:stands`)
+- [ ] **MapLibre Native 12.3.1 Compose Host**:
+  - Wrap `MapView` inside `AndroidView` with a `LifecycleEventObserver` preserving camera position, zoom, and layer selection across bottom-tab switches.
+  - Structure map style URLs behind a clean `MapTileConfig` provider so USGS Topo works out of the box and commercial Satellite/Hybrid providers (MapTiler/Mapbox) swap cleanly via `BuildConfig` keys before Play Store release.
+- [ ] **Base Layer Switcher (`SegmentedButton`)**:
+  - **Topo** (USGS National Map — Scout Free).
+  - **Satellite**, **Hybrid**, and **Hillshade** toggle (**Alpha**; tapping on Scout opens Alpha Paywall sheet; auto-reverts to Topo if preview expires).
+- [ ] **Tactical GeoJSON Overlays**:
+  - **Scout Free**: Live GPS puck + rotating True-North FOV beam from `RotationVectorCompass` (Flat vs. Upright badge + calibration banner on `CALIBRATION_NEEDED`) + basic wind-direction arrow.
+  - **Alpha**: **300-yard Downwind Scent Cone**, secondary **Diurnal Thermal Drift Arrow** + leeward rotor warning chip, toggleable **50–300 yd Range Rings**, **Wind vs. Facing Alignment HUD Badge** (`IN YOUR FACE`, `CROSSWIND`, `AT YOUR BACK`) with 5° hysteresis, and **Scout Mode** (tap map to project a temporary 300-yd scent cone + bearing/yardage).
+- [ ] **Stand Tagging & Detail Sheet (`:feature:stands`)**:
+  - Enforce Scout limit (**1 Stand**, **3 Waypoints**) with Alpha upsell prompt when adding a 2nd stand or 4th waypoint; Unlimited for Alpha. Never delete stands/waypoints created during the 36-hour preview when locking back to Scout—display extras read-only with an Alpha lock badge.
+  - Tag stand at current GPS or map long-press: Name, Stand Type, Stand Height (`ft`), Terrain Position, interactive **8-point Wind Rose** (`N`–`NW`), optional slope aspect/grade override, and notes.
+  - Optional **Draw Entry/Exit Route** polyline tool (**Alpha**) linked to `StandRouteEntity`.
+  - Color-coded stand pins (`GOOD` green, `CAUTION` amber, `UNSAFE` red, `UNSET` gray). Tapping opens Material 3 `ModalBottomSheet` with live wind verdict, distance + **Cosine-Compensated Ballistic Yardage** (**Alpha**), `StandFreshness` + one-tap **"Start Sit / End Sit"** logging (**Alpha**), `EntryRouteWindAuditor` warning (**Alpha**), and **"Project Scent"** (**Alpha**).
+- [ ] **Offline Map Pack Manager (Alpha)**:
+  - Download current viewport bounding box (zooms 10–16) via MapLibre `OfflineManager` with explicit HTTP `User-Agent`, max tile-count guardrail, progress bar, MB estimate, error/retry handling, and delete list.
+
+---
+
+## Phase 3 Verification Gate
+- [ ] Add unit tests for:
+  - Updated `CompassAndBarometerMathTest` (upright matrix continuity, MSL-to-MSL barometer trend, `360.0°` rounding).
+  - Updated `MidwestRutCalendarTest` (new original phase names).
+  - `EntitlementEvaluatorTest` (36h preview active at `t+0h` and `t+35h59m`, automatic Scout lockback at `t+36h00m`, clock-rollback protection, VIP/Promo comp override, 14-day offline grace window).
+  - Room v1 -> v2 migration test in `:core:data` (`MigrationTestHelper` / Robolectric).
+  - ViewModel unit tests for `:feature:forecast`, `:feature:map`, `:feature:stands`, and `:feature:settings`.
+- [ ] Run `.\gradlew.bat :core:domain:test :core:data:testDebugUnitTest :core:sensors:testDebugUnitTest :feature:forecast:testDebugUnitTest :feature:map:testDebugUnitTest :feature:stands:testDebugUnitTest :feature:settings:testDebugUnitTest --no-daemon` and confirm 0 failures.
+- [ ] Run `.\gradlew.bat :app:assembleDebug --no-daemon` and verify clean debug APK output.
+
+---
+
+## Future Phases (Reference Only — Do Not Execute in Phase 3)
+- **Phase 4**: Foreground Blood-Trail GPS Tracker (`:feature:tracker`), Shot Recovery Calculator UI, Personal Field Log & Sighting Pattern Matrix (`:feature:fieldlog`).
+- **Phase 5**: AI Hunt Briefing & Offscreen MapLibre Snapshot Share (`:feature:gemini`), **Trail Cam Import Hub** (Android `ACTION_SEND` share receiver, gallery folder watch for Reveal/Moultrie/Spypoint/Stealth Cam, USB-C SD card bulk importer with burst clustering & automatic historical weather/rut stamping), Commercial Weather/Tile API key wiring (NWS/Open-Meteo Commercial + MapTiler), and Signed Release AAB for Google Play.

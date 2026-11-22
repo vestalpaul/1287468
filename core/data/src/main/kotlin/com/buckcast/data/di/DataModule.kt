@@ -2,9 +2,13 @@ package com.buckcast.data.di
 
 import android.content.Context
 import androidx.room.Room
+import com.buckcast.data.entitlement.BillingGateway
+import com.buckcast.data.entitlement.EntitlementRepositoryImpl
+import com.buckcast.data.entitlement.RevenueCatBillingGateway
 import com.buckcast.data.export.BackupRepositoryImpl
 import com.buckcast.data.local.BuckCastDatabase
 import com.buckcast.data.local.dao.AppSettingsDao
+import com.buckcast.data.local.dao.EntitlementCacheDao
 import com.buckcast.data.local.dao.FieldLogDao
 import com.buckcast.data.local.dao.SightingDao
 import com.buckcast.data.local.dao.StandDao
@@ -19,7 +23,9 @@ import com.buckcast.data.repository.SettingsRepositoryImpl
 import com.buckcast.data.repository.StandRepositoryImpl
 import com.buckcast.data.repository.WeatherRepositoryImpl
 import com.buckcast.data.sync.WeatherSyncScheduler
+import com.buckcast.domain.model.AppRuntimeConfig
 import com.buckcast.domain.repository.BackupRepository
+import com.buckcast.domain.repository.EntitlementRepository
 import com.buckcast.domain.repository.FieldDataRepository
 import com.buckcast.domain.repository.SettingsRepository
 import com.buckcast.domain.repository.StandRepository
@@ -56,7 +62,9 @@ object DataModule {
         context,
         BuckCastDatabase::class.java,
         "buckcast.db",
-    ).build()
+    )
+        .addMigrations(BuckCastDatabase.MIGRATION_1_2)
+        .build()
 
     @Provides
     fun provideStandDao(db: BuckCastDatabase): StandDao = db.standDao()
@@ -81,6 +89,9 @@ object DataModule {
 
     @Provides
     fun provideAppSettingsDao(db: BuckCastDatabase): AppSettingsDao = db.appSettingsDao()
+
+    @Provides
+    fun provideEntitlementCacheDao(db: BuckCastDatabase): EntitlementCacheDao = db.entitlementCacheDao()
 
     @Provides
     @Singleton
@@ -157,4 +168,23 @@ object DataModule {
     fun provideWeatherSyncScheduler(
         @ApplicationContext context: Context,
     ): WeatherSyncScheduler = WeatherSyncScheduler(context)
+
+    @Provides
+    @Singleton
+    fun provideBillingGateway(
+        @ApplicationContext context: Context,
+        runtimeConfig: AppRuntimeConfig,
+    ): BillingGateway = RevenueCatBillingGateway(context, runtimeConfig)
+
+    @Provides
+    @Singleton
+    fun provideEntitlementRepository(
+        entitlementCacheDao: EntitlementCacheDao,
+        billingGateway: BillingGateway,
+        runtimeConfig: AppRuntimeConfig,
+    ): EntitlementRepository = EntitlementRepositoryImpl(
+        cacheDao = entitlementCacheDao,
+        billingGateway = billingGateway,
+        runtimeConfig = runtimeConfig,
+    )
 }

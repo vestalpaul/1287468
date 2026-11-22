@@ -57,12 +57,12 @@
 ---
 
 ## Phase 3B: DropTine Alpha Entitlement Engine, 36-Hour Welcome Preview & VIP Comp System (`:core:domain`, `:core:data`, `:feature:settings`)
-- [ ] **Pure-Domain Tier, 36-Hour Preview & Feature Gate (`:core:domain`)**:
+- [x] **Pure-Domain Tier, 36-Hour Preview & Feature Gate (`:core:domain`)**:
   - Create `SubscriptionTier` (`SCOUT`, `ALPHA`), `EntitlementSource` (`NONE`, `ALPHA_PREVIEW_36H`, `PLAY_SUBSCRIPTION`, `PROMO_COMP`, `DEBUG_OVERRIDE`), `AlphaFeature` enum (7-day forecast, 5-factor breakdown, hourly table, Satellite/Hybrid/Hillshade layers, offline map packs, 300-yd scent/thermal cones, unlimited stands/waypoints, stand wind-match & freshness, route auditor, ballistic yardage, blood-trail tracker, premium themes), and `EntitlementState(tier, source, previewStartedEpochMs, previewExpiresEpochMs, subscriptionExpiresEpochMs, lastVerifiedEpochMs, isOfflineGraceActive, remainingPreviewMs)`.
   - Implement pure-Kotlin `EntitlementEvaluator`:
     - **Priority order**: `DEBUG_OVERRIDE` (debug only) -> active `PLAY_SUBSCRIPTION` / `PROMO_COMP` (with **14-day offline grace window**) -> active **36-hour `ALPHA_PREVIEW_36H`** (`36 * 3600 * 1000L` ms from `effectiveStart = min(localFirstLaunch, serverFirstSeen)`) -> `SCOUT`.
     - **Anti-rollback guard**: Track `maxObservedEpochMs`; if `now < maxObservedEpochMs - 5_minutes`, evaluate remaining preview against `maxObservedEpochMs` so rolling the device clock backward cannot extend the 36-hour window.
-- [ ] **RevenueCat + Play Billing Adapter (`:core:data`)**:
+- [x] **RevenueCat + Play Billing Adapter (`:core:data`)**:
   - Add `com.revenuecat.purchases:purchases` behind `EntitlementRepository` (`Flow<EntitlementState>`) backed by Room `EntitlementCacheEntity` (in DB v2, storing `firstLaunchEpochMs`, `maxObservedEpochMs`, `lastKnownTier`, `source`, `expiresAtEpochMs`, `lastVerifiedEpochMs`).
   - Initialize `firstLaunchEpochMs` atomically on first app open so every new user immediately starts their 36-hour **DropTine Alpha** preview with zero credit card friction, and automatically transitions to **Scout** when the 36 hours elapse (emitting a non-destructive lockback that preserves user stands/data and gracefully reverts Alpha-only themes to `TIMBERLINE_DARK` and map layers to USGS Topo).
   - Support a clean placeholder/build-config RevenueCat public key so debug builds run cleanly before Play Console SKUs are live.
@@ -70,14 +70,14 @@
     - Expose the user's RevenueCat `appUserID` as a copyable **DropTine Support ID** in `Settings` (allows instant 1-click free Alpha grants for any chosen person via RevenueCat Promotional Entitlements).
     - Add an **Enter Access Code** dialog in `Settings` that calls `Purchases.logIn(code)` + refreshes entitlements (supports Play Store reviewers and VIP passes).
     - Include a **Debug-Only Entitlement Switcher** (`BuildConfig.DEBUG`) in `Settings` (`AUTO`, `FORCE_ALPHA`, `FORCE_SCOUT`, `RESET_36H_PREVIEW`, `EXPIRE_36H_PREVIEW`) to test the full preview -> Scout lockback flow on hardware immediately.
-- [ ] **Material 3 Alpha Paywall Sheet & Settings Screen (`:feature:settings`)**:
+- [x] **Material 3 Alpha Paywall Sheet & Settings Screen (`:feature:settings`)**:
   - Build a Material 3 `ModalBottomSheet` paywall highlighting **DropTine Alpha** (`$1.99/mo` or `$14.99/yr`, Restore Purchases, Manage Subscription link, and clear remaining preview banner if opened during the 36-hour window).
   - Build the `Settings` screen with: Theme Picker (preview swatches; Alpha themes unlocked during 36h preview or Alpha sub, locked on Scout), Subscription / Preview Countdown card & copyable Support ID, Access Code entry, Rut Peak Date calibration, Legal Shooting Light offset, and Debug Entitlement Switcher (debug builds only).
 
 ---
 
 ## Phase 3C: Material 3 Home Dashboard (`:feature:forecast`)
-- [ ] **Distinct Material 3 Layout (Not a DeerCast Clone)**:
+- [x] **Distinct Material 3 Layout (Not a DeerCast Clone)**:
   - Top App Bar with active location chip, manual refresh button, clean offline cache indicator, and a subtle `Alpha Preview · XXh left` pill when in the 36-hour welcome window (tapping opens the Alpha upgrade sheet).
   - **Hero Today Card** (`ElevatedCard`): Current temp (`°F`), wind (`dir @ mph`), pressure (`inHg`) + trend arrow, AM/PM rating chips (`SLOW` / `OKAY` / `GOOD` / `GREAT`), current Whitetail Phase, Moon Phase, and **Custom Compose `Canvas` Dual Sun & Moon Arcs** plotting Sunrise/Sunset, Civil Twilight (`-6°`), Legal Shooting Light (`-30m / +30m`), and Moonrise/Moonset.
   - **7-Day Outlook Strip + View Toggle** (`SingleChoiceSegmentedButtonRow` for `Cards` / `Timeline`):

@@ -119,6 +119,7 @@ object MapTileConfig {
             {
               "version": 8,
               "name": "DropTine ${baseLayer.label}",
+              "glyphs": "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
               "sources": {
                 $sourcesBlock
               },

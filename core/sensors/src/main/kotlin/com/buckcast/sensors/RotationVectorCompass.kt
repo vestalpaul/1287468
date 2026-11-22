@@ -21,9 +21,11 @@ import java.util.concurrent.atomic.AtomicReference
  * smoothing (~20 Hz), and 10-mile cached `GeomagneticField` declination.
  */
 open class RotationVectorCompass(
-    private val context: Context,
-    private val sensorManager: SensorManager,
+    private val context: Context?,
+    private val sensorManager: SensorManager?,
 ) {
+    protected constructor() : this(null, null)
+
     private val currentLocation = AtomicReference<GeoPoint?>(null)
     private val declinationCache = DeclinationCache()
 
@@ -32,9 +34,10 @@ open class RotationVectorCompass(
     }
 
     open fun observeHeading(): Flow<CompassReading> = callbackFlow {
-        val primarySensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+        val sm = sensorManager
+        val primarySensor = sm?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
         val fallbackSensor = if (primarySensor == null) {
-            sensorManager.getDefaultSensor(Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR)
+            sm?.getDefaultSensor(Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR)
         } else {
             null
         }
@@ -45,7 +48,7 @@ open class RotationVectorCompass(
             else -> CompassSensorSource.UNAVAILABLE
         }
 
-        if (activeSensor == null) {
+        if (activeSensor == null || sm == null) {
             trySend(
                 CompassReading(
                     trueHeadingDeg = 0.0,
@@ -63,7 +66,7 @@ open class RotationVectorCompass(
             return@callbackFlow
         }
 
-        val displayManager = context.getSystemService(DisplayManager::class.java)
+        val displayManager = context?.getSystemService(DisplayManager::class.java)
         val rawMatrix = FloatArray(9)
         val remappedMatrix = FloatArray(9)
 
@@ -125,9 +128,9 @@ open class RotationVectorCompass(
             }
         }
 
-        sensorManager.registerListener(listener, activeSensor, SAMPLING_PERIOD_US)
+        sm.registerListener(listener, activeSensor, SAMPLING_PERIOD_US)
         awaitClose {
-            sensorManager.unregisterListener(listener)
+            sm.unregisterListener(listener)
         }
     }
 

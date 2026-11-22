@@ -9,11 +9,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.EditLocationAlt
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -36,11 +41,39 @@ import com.buckcast.domain.model.StandType
 import com.buckcast.domain.model.TerrainPosition
 import java.util.Locale
 
+data class StandEditorDraft(
+    val existingStand: Stand? = null,
+    val location: GeoPoint,
+    val name: String = existingStand?.name.orEmpty(),
+    val standType: StandType = existingStand?.standType ?: StandType.HANG_ON,
+    val standHeightFeet: Float = (existingStand?.standHeightFeet ?: 18.0).toFloat(),
+    val terrainPosition: TerrainPosition = existingStand?.terrainPosition ?: TerrainPosition.UPPER_THIRD,
+    val selectedWindDirs: Set<WindRoseDirection> = existingStand?.preferredWindSectors
+        ?.let { WindRoseDirection.fromSectors(it) }
+        ?: setOf(WindRoseDirection.N, WindRoseDirection.NW),
+    val slopeAspectText: String = existingStand?.slopeAspectDeg?.toInt()?.toString().orEmpty(),
+    val slopeGradeText: String = existingStand?.slopeGradePercent?.toInt()?.toString().orEmpty(),
+    val notes: String = existingStand?.notes.orEmpty(),
+) {
+    companion object {
+        fun fromStand(stand: Stand): StandEditorDraft = StandEditorDraft(
+            existingStand = stand,
+            location = stand.location,
+        )
+
+        fun forNewLocation(location: GeoPoint): StandEditorDraft = StandEditorDraft(
+            existingStand = null,
+            location = location,
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun StandEditorSheet(
     initialLocation: GeoPoint,
     existingStand: Stand? = null,
+    draft: StandEditorDraft? = null,
     isAlpha: Boolean,
     onSave: (
         name: String,
@@ -53,24 +86,43 @@ fun StandEditorSheet(
         slopeGradePercent: Double?,
         notes: String,
     ) -> Unit,
+    onRequestReposition: ((StandEditorDraft) -> Unit)? = null,
     onStartRouteDrawing: ((Stand) -> Unit)? = null,
     onOpenPaywall: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val resolvedExisting = draft?.existingStand ?: existingStand
+    val resolvedLocation = draft?.location ?: initialLocation
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var name by remember { mutableStateOf(existingStand?.name.orEmpty()) }
-    var standType by remember { mutableStateOf(existingStand?.standType ?: StandType.HANG_ON) }
-    var heightFeet by remember { mutableFloatStateOf((existingStand?.standHeightFeet ?: 18.0).toFloat()) }
-    var terrainPos by remember { mutableStateOf(existingStand?.terrainPosition ?: TerrainPosition.UPPER_THIRD) }
-    var selectedDirs by remember {
+    val draftSeedKey = "${resolvedExisting?.id.orEmpty()}_${resolvedLocation.latitude}_${resolvedLocation.longitude}"
+    var name by remember(draftSeedKey) {
+        mutableStateOf(draft?.name ?: resolvedExisting?.name.orEmpty())
+    }
+    var standType by remember(draftSeedKey) {
+        mutableStateOf(draft?.standType ?: resolvedExisting?.standType ?: StandType.HANG_ON)
+    }
+    var heightFeet by remember(draftSeedKey) {
+        mutableFloatStateOf(draft?.standHeightFeet ?: (resolvedExisting?.standHeightFeet ?: 18.0).toFloat())
+    }
+    var terrainPos by remember(draftSeedKey) {
+        mutableStateOf(draft?.terrainPosition ?: resolvedExisting?.terrainPosition ?: TerrainPosition.UPPER_THIRD)
+    }
+    var selectedDirs by remember(draftSeedKey) {
         mutableStateOf(
-            existingStand?.preferredWindSectors?.let { WindRoseDirection.fromSectors(it) }
+            draft?.selectedWindDirs
+                ?: resolvedExisting?.preferredWindSectors?.let { WindRoseDirection.fromSectors(it) }
                 ?: setOf(WindRoseDirection.N, WindRoseDirection.NW),
         )
     }
-    var slopeAspectText by remember { mutableStateOf(existingStand?.slopeAspectDeg?.toInt()?.toString().orEmpty()) }
-    var slopeGradeText by remember { mutableStateOf(existingStand?.slopeGradePercent?.toInt()?.toString().orEmpty()) }
-    var notes by remember { mutableStateOf(existingStand?.notes.orEmpty()) }
+    var slopeAspectText by remember(draftSeedKey) {
+        mutableStateOf(draft?.slopeAspectText ?: resolvedExisting?.slopeAspectDeg?.toInt()?.toString().orEmpty())
+    }
+    var slopeGradeText by remember(draftSeedKey) {
+        mutableStateOf(draft?.slopeGradeText ?: resolvedExisting?.slopeGradePercent?.toInt()?.toString().orEmpty())
+    }
+    var notes by remember(draftSeedKey) {
+        mutableStateOf(draft?.notes ?: resolvedExisting?.notes.orEmpty())
+    }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
@@ -81,15 +133,41 @@ fun StandEditorSheet(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
-                text = if (existingStand == null) "Tag New Stand" else "Edit ${existingStand.name}",
+                text = if (resolvedExisting == null) "Tag New Stand" else "Edit ${resolvedExisting.name}",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                text = String.format(Locale.US, "GPS %.5f, %.5f", initialLocation.latitude, initialLocation.longitude),
+                text = String.format(Locale.US, "GPS %.5f, %.5f", resolvedLocation.latitude, resolvedLocation.longitude),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+
+            if (onRequestReposition != null) {
+                OutlinedButton(
+                    onClick = {
+                        onRequestReposition(
+                            StandEditorDraft(
+                                existingStand = resolvedExisting,
+                                location = resolvedLocation,
+                                name = name,
+                                standType = standType,
+                                standHeightFeet = heightFeet,
+                                terrainPosition = terrainPos,
+                                selectedWindDirs = selectedDirs,
+                                slopeAspectText = slopeAspectText,
+                                slopeGradeText = slopeGradeText,
+                                notes = notes,
+                            ),
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Rounded.EditLocationAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Reposition on Map")
+                }
+            }
 
             OutlinedTextField(
                 value = name,
@@ -169,11 +247,11 @@ fun StandEditorSheet(
                 maxLines = 3,
             )
 
-            if (existingStand != null && onStartRouteDrawing != null) {
+            if (resolvedExisting != null && onStartRouteDrawing != null) {
                 OutlinedButton(
                     onClick = {
                         if (isAlpha) {
-                            onStartRouteDrawing(existingStand)
+                            onStartRouteDrawing(resolvedExisting)
                             onDismiss()
                         } else {
                             onOpenPaywall()
@@ -189,7 +267,7 @@ fun StandEditorSheet(
                 onClick = {
                     onSave(
                         name,
-                        initialLocation,
+                        resolvedLocation,
                         standType,
                         heightFeet.toDouble(),
                         terrainPos,

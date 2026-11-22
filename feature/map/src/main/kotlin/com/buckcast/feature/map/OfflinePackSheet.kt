@@ -21,6 +21,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -51,6 +52,7 @@ fun OfflinePackSheet(
     showHillshade: Boolean,
     packState: OfflinePackManagerState,
     onDownloadViewport: (packName: String) -> Unit,
+    onCancelDownload: () -> Unit,
     onDeletePack: (packId: Long) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -153,16 +155,25 @@ fun OfflinePackSheet(
                 )
             }
 
-            Button(
-                onClick = { onDownloadViewport(packName) },
-                enabled = !packState.isDownloading && viewportBox != null && !overLimit,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Icon(Icons.Rounded.Download, contentDescription = null)
-                Text(
-                    text = if (packState.errorMessage != null) "Retry Viewport Download" else "Download Current Area",
-                    modifier = Modifier.padding(start = 8.dp),
-                )
+            if (packState.isDownloading) {
+                OutlinedButton(
+                    onClick = onCancelDownload,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Cancel Download", color = MaterialTheme.colorScheme.error)
+                }
+            } else {
+                Button(
+                    onClick = { onDownloadViewport(packName) },
+                    enabled = viewportBox != null && !overLimit,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Rounded.Download, contentDescription = null)
+                    Text(
+                        text = if (packState.errorMessage != null) "Retry Viewport Download" else "Download Current Area",
+                        modifier = Modifier.padding(start = 8.dp),
+                    )
+                }
             }
 
             Text(

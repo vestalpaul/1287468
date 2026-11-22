@@ -48,6 +48,7 @@ class BuckCastApplication : Application(), Configuration.Provider {
                     .build()
                 chain.proceed(request)
             }
+            .addInterceptor(DropTineStyleInterceptor { BuildConfig.MAPTILER_API_KEY })
             .build()
         HttpRequestUtil.setOkHttpClient(tileHttpClient)
 

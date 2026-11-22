@@ -33,6 +33,7 @@ android {
 
 dependencies {
     implementation(project(":core:domain"))
+    implementation(project(":core:sensors"))
 
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.lifecycle.runtime.ktx)

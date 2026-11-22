@@ -195,11 +195,15 @@ class MapViewModelTest {
     }
 
     @Test
-    fun `MapTileConfig builds 256px Esri Satellite, multi-layer Hybrid, and Terrarium raster-dem Hillshade styles`() {
+    fun `MapTileConfig builds 128px Clarity Satellite, 5-layer Hybrid stack, Terrarium Hillshade, and virtual HTTPS offline-safe styles`() {
         assertEquals("topo.json", MapTileConfig.styleFileName(MapBaseLayer.TOPO, showHillshade = false))
         assertEquals("satellite.json", MapTileConfig.styleFileName(MapBaseLayer.SATELLITE, showHillshade = false))
         assertEquals("hybrid.json", MapTileConfig.styleFileName(MapBaseLayer.HYBRID, showHillshade = false))
         assertEquals("topo_hillshade.json", MapTileConfig.styleFileName(MapBaseLayer.TOPO, showHillshade = true))
+        assertEquals(
+            "https://styles.droptine.app/hybrid_hillshade_offline.json",
+            MapTileConfig.styleUrl(MapBaseLayer.HYBRID, showHillshade = true, offlineSafe = true),
+        )
 
         val usgsTopo = MapTileConfig.buildStyleJson(MapBaseLayer.TOPO, showHillshade = false, mapTilerApiKey = "")
         assertTrue(usgsTopo.contains("USGSTopo"))
@@ -207,19 +211,37 @@ class MapViewModelTest {
         assertTrue(usgsTopo.contains("\"maxzoom\": 16"))
         assertFalse(usgsTopo.contains("raster-dem"))
 
-        val esriSat = MapTileConfig.buildStyleJson(MapBaseLayer.SATELLITE, showHillshade = false, mapTilerApiKey = "")
-        assertTrue(esriSat.contains(MapTileConfig.ESRI_WORLD_IMAGERY_URL))
-        assertTrue(esriSat.contains("\"tileSize\": 256"))
-        assertTrue(esriSat.contains("\"maxzoom\": 19"))
+        val esriClaritySat = MapTileConfig.buildStyleJson(MapBaseLayer.SATELLITE, showHillshade = false, mapTilerApiKey = "")
+        assertTrue(esriClaritySat.contains(MapTileConfig.ESRI_CLARITY_IMAGERY_URL))
+        assertTrue(esriClaritySat.contains("\"tileSize\": 128"))
+        assertTrue(esriClaritySat.contains("\"maxzoom\": 19"))
 
+        // Hybrid online without extra Hillshade chip still includes Terrarium DEM @ 0.45 + Hydro + Contours + Transport/Labels
+        val esriHybridDefault = MapTileConfig.buildStyleJson(MapBaseLayer.HYBRID, showHillshade = false, mapTilerApiKey = "")
+        assertTrue(esriHybridDefault.contains(MapTileConfig.ESRI_CLARITY_IMAGERY_URL))
+        assertTrue(esriHybridDefault.contains(MapTileConfig.USGS_HYDRO_URL))
+        assertTrue(esriHybridDefault.contains(MapTileConfig.USGS_CONTOURS_URL))
+        assertTrue(esriHybridDefault.contains(MapTileConfig.ESRI_TRANSPORTATION_URL))
+        assertTrue(esriHybridDefault.contains(MapTileConfig.ESRI_BOUNDARIES_PLACES_URL))
+        assertTrue(esriHybridDefault.contains("\"hillshade-exaggeration\": 0.45"))
+        assertTrue(esriHybridDefault.contains("\"raster-opacity\": 0.72"))
+        assertTrue(esriHybridDefault.contains("\"raster-opacity\": 0.80"))
+        assertTrue(esriHybridDefault.contains("\"minzoom\": 11"))
+
+        // Hybrid with Hillshade chip ON boosts exaggeration to 0.75
         val esriHybridWithHill = MapTileConfig.buildStyleJson(MapBaseLayer.HYBRID, showHillshade = true, mapTilerApiKey = "")
-        assertTrue(esriHybridWithHill.contains(MapTileConfig.ESRI_WORLD_IMAGERY_URL))
-        assertTrue(esriHybridWithHill.contains(MapTileConfig.ESRI_TRANSPORTATION_URL))
-        assertTrue(esriHybridWithHill.contains(MapTileConfig.ESRI_BOUNDARIES_PLACES_URL))
-        assertTrue(esriHybridWithHill.contains("\"type\": \"raster-dem\""))
-        assertTrue(esriHybridWithHill.contains("\"encoding\": \"terrarium\""))
-        assertTrue(esriHybridWithHill.contains("\"type\": \"hillshade\""))
-        assertTrue(esriHybridWithHill.contains("\"hillshade-exaggeration\": 0.7"))
+        assertTrue(esriHybridWithHill.contains("\"hillshade-exaggeration\": 0.75"))
+
+        // Offline-safe Hybrid omits {bbox-epsg-3857} contours so OfflineManager completes cleanly
+        val hybridOffline = MapTileConfig.buildStyleJson(
+            baseLayer = MapBaseLayer.HYBRID,
+            showHillshade = true,
+            mapTilerApiKey = "",
+            offlineSafe = true,
+        )
+        assertTrue(hybridOffline.contains(MapTileConfig.USGS_HYDRO_URL))
+        assertFalse(hybridOffline.contains("{bbox-epsg-3857}"))
+        assertFalse(hybridOffline.contains("droptine-hybrid-contours"))
 
         val mapTilerSat = MapTileConfig.buildStyleJson(
             baseLayer = MapBaseLayer.SATELLITE,
@@ -232,17 +254,25 @@ class MapViewModelTest {
         assertEquals("Open Sans Semibold", MapTileConfig.DEFAULT_GLYPH_FONT)
         for (layer in MapBaseLayer.entries) {
             for (hillshade in listOf(false, true)) {
-                val styleJson = MapTileConfig.buildStyleJson(layer, hillshade, mapTilerApiKey = "")
-                val sourcesSection = styleJson.substringAfter("\"sources\"").substringBefore("\"layers\"")
-                val sourceBlockCount = Regex(""""type":\s*"raster(?:-dem)?"""").findAll(sourcesSection).count()
-                val tileSizeCount = Regex(""""tileSize":\s*256""").findAll(sourcesSection).count()
-                val maxZoomMatches = Regex(""""maxzoom":\s*(\d+)""").findAll(sourcesSection).toList()
-                assertTrue("Expected at least 1 raster source for $layer/$hillshade", sourceBlockCount >= 1)
-                assertEquals("Every source in $layer/$hillshade must declare tileSize 256", sourceBlockCount, tileSizeCount)
-                assertEquals("Every source in $layer/$hillshade must declare maxzoom", sourceBlockCount, maxZoomMatches.size)
-                maxZoomMatches.forEach { match ->
-                    val z = match.groupValues[1].toInt()
-                    assertTrue("Invalid maxzoom $z in $layer/$hillshade", z in 1..22)
+                for (offline in listOf(false, true)) {
+                    val fileName = MapTileConfig.styleFileName(layer, hillshade, offline)
+                    val resolved = MapTileConfig.resolveStyleJsonForPath("/$fileName", "")
+                    assertEquals(
+                        MapTileConfig.buildStyleJson(layer, hillshade, "", offline),
+                        resolved,
+                    )
+                    val styleJson = resolved!!
+                    val sourcesSection = styleJson.substringAfter("\"sources\"").substringBefore("\"layers\"")
+                    val sourceBlockCount = Regex(""""type":\s*"raster(?:-dem)?"""").findAll(sourcesSection).count()
+                    val tileSizeCount = Regex(""""tileSize":\s*(?:128|256)""").findAll(sourcesSection).count()
+                    val maxZoomMatches = Regex(""""maxzoom":\s*(\d+)""").findAll(sourcesSection).toList()
+                    assertTrue("Expected at least 1 raster source for $layer/$hillshade", sourceBlockCount >= 1)
+                    assertEquals("Every source in $layer/$hillshade must declare tileSize 128 or 256", sourceBlockCount, tileSizeCount)
+                    assertEquals("Every source in $layer/$hillshade must declare maxzoom", sourceBlockCount, maxZoomMatches.size)
+                    maxZoomMatches.forEach { match ->
+                        val z = match.groupValues[1].toInt()
+                        assertTrue("Invalid maxzoom $z in $layer/$hillshade", z in 1..22)
+                    }
                 }
             }
         }
@@ -262,9 +292,16 @@ class MapViewModelTest {
             assertTrue(vm.uiState.value.scoutModeEnabled)
             assertTrue(vm.uiState.value.statusMessage.orEmpty().contains("Scout Mode active"))
 
+            // Tapping the map sets scoutResult and auto-dismisses the Scout hint banner
+            vm.onMapTap(GeoPoint(41.589, -93.621))
+            advanceUntilIdle()
+            assertTrue(vm.uiState.value.scoutResult != null)
+            assertNull(vm.uiState.value.statusMessage)
+
             assertTrue(vm.toggleScoutMode())
             advanceUntilIdle()
             assertFalse(vm.uiState.value.scoutModeEnabled)
+            assertNull(vm.uiState.value.scoutResult)
             assertNull(vm.uiState.value.statusMessage)
 
             assertTrue(vm.toggleScoutMode())
@@ -309,6 +346,55 @@ class MapViewModelTest {
             assertEquals("s-1", vm.uiState.value.projectedStandId)
             assertTrue(vm.uiState.value.camera.jumpNonce >= 2L)
             assertEquals("Waiting for GPS fix...", vm.uiState.value.statusMessage)
+
+            job.cancel()
+        }
+
+    @Test
+    fun `orientationMode toggles on Scout and Alpha, releases smoothly on manual rotate, and smooths across 359-0 North seam`() =
+        runTest(testDispatcher) {
+            val compassFlow = MutableStateFlow(compassReading(heading = 2.0))
+            val vm = createViewModel(
+                entitlementRepo = FakeEntitlementRepo(SubscriptionTier.SCOUT),
+                compassFlow = compassFlow,
+            )
+            val job = launch { vm.uiState.collect() }
+            advanceUntilIdle()
+
+            assertEquals(MapOrientationMode.NORTH_UP, vm.uiState.value.orientationMode)
+            assertEquals(0L, vm.uiState.value.snapNorthNonce)
+
+            // Available on Scout Free: NORTH_UP -> HEADING_UP (no snap)
+            vm.toggleOrientationMode()
+            advanceUntilIdle()
+            assertEquals(MapOrientationMode.HEADING_UP, vm.uiState.value.orientationMode)
+            assertEquals(0L, vm.uiState.value.snapNorthNonce)
+
+            // User manual two-finger rotation releases HEADING_UP -> NORTH_UP without snapping bearing
+            vm.onUserManualRotate()
+            advanceUntilIdle()
+            assertEquals(MapOrientationMode.NORTH_UP, vm.uiState.value.orientationMode)
+            assertEquals(0L, vm.uiState.value.snapNorthNonce)
+
+            // Tapping toggle from HEADING_UP -> NORTH_UP increments snapNorthNonce so camera animates to 0°
+            vm.toggleOrientationMode()
+            advanceUntilIdle()
+            assertEquals(MapOrientationMode.HEADING_UP, vm.uiState.value.orientationMode)
+            vm.toggleOrientationMode()
+            advanceUntilIdle()
+            assertEquals(MapOrientationMode.NORTH_UP, vm.uiState.value.orientationMode)
+            assertEquals(1L, vm.uiState.value.snapNorthNonce)
+
+            // North seam interpolation & deadband tests
+            val cwAcrossNorth = computeNextMapBearing(currentDeg = 359.0, targetDeg = 2.0, alpha = 0.25)
+            assertEquals(359.75, cwAcrossNorth!!, 1e-6)
+
+            val ccwAcrossNorth = computeNextMapBearing(currentDeg = 1.0, targetDeg = 358.0, alpha = 0.25)
+            assertEquals(0.25, ccwAcrossNorth!!, 1e-6)
+
+            // < 0.5 deg delta suppressed cleanly
+            assertNull(computeNextMapBearing(currentDeg = 359.8, targetDeg = 0.2, alpha = 0.25, deadbandDeg = 0.5))
+            assertNull(computeNextMapBearing(currentDeg = 120.0, targetDeg = 120.4, alpha = 0.25, deadbandDeg = 0.5))
 
             job.cancel()
         }

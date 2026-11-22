@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.WorkManager
 import com.buckcast.data.sync.WeatherRefreshWorker
+import com.buckcast.feature.map.MapBaseLayer
+import com.buckcast.feature.map.MapTileConfig
 import okhttp3.Call
 import okhttp3.Connection
 import okhttp3.Interceptor
@@ -96,6 +98,70 @@ class BuckCastApplicationStartupTest {
             .getWorkInfosForUniqueWork(WeatherRefreshWorker.UNIQUE_WORK_NAME)
             .get()
         assertTrue("Expected periodic weather sync work to be enqueued", workInfos.isNotEmpty())
+    }
+
+    @Test
+    fun `DropTineStyleInterceptor returns 200 OK MapLibre style JSON for all layers and hillshade variants`() {
+        val styleInterceptor = DropTineStyleInterceptor { "" }
+
+        for (layer in MapBaseLayer.entries) {
+            for (hillshade in listOf(false, true)) {
+                for (offlineSafe in listOf(false, true)) {
+                    val url = MapTileConfig.styleUrl(
+                        baseLayer = layer,
+                        showHillshade = hillshade,
+                        offlineSafe = offlineSafe,
+                    )
+                    val request = Request.Builder().url(url).build()
+                    var networkProceeded = false
+                    val chain = object : Interceptor.Chain {
+                        override fun request(): Request = request
+                        override fun proceed(request: Request): Response {
+                            networkProceeded = true
+                            error("Virtual style URL must not hit network: $url")
+                        }
+                        override fun connection(): Connection? = null
+                        override fun call(): Call = OkHttpClient().newCall(request)
+                        override fun connectTimeoutMillis(): Int = 10_000
+                        override fun withConnectTimeout(timeout: Int, unit: TimeUnit): Interceptor.Chain = this
+                        override fun readTimeoutMillis(): Int = 10_000
+                        override fun withReadTimeout(timeout: Int, unit: TimeUnit): Interceptor.Chain = this
+                        override fun writeTimeoutMillis(): Int = 10_000
+                        override fun withWriteTimeout(timeout: Int, unit: TimeUnit): Interceptor.Chain = this
+                    }
+                    val response = styleInterceptor.intercept(chain)
+                    assertEquals(200, response.code)
+                    assertEquals(DropTineStyleInterceptor.CACHE_CONTROL_HEADER, response.header("Cache-Control"))
+                    assertTrue(!networkProceeded)
+                    val body = response.body?.string().orEmpty()
+                    assertTrue("Missing version 8 in $url", body.contains("\"version\": 8"))
+                    assertTrue("Missing droptine-base in $url", body.contains("\"droptine-base\""))
+                    if (offlineSafe) {
+                        assertTrue("Offline style must exclude {bbox-epsg-3857}: $url", !body.contains("{bbox-epsg-3857}"))
+                    }
+                }
+            }
+        }
+
+        // Unknown virtual style path returns 404 locally without hitting network
+        val unknownRequest = Request.Builder().url("https://styles.droptine.app/unknown_style.json").build()
+        val unknownChain = object : Interceptor.Chain {
+            override fun request(): Request = unknownRequest
+            override fun proceed(request: Request): Response = error("Should not proceed for unknown host path")
+            override fun connection(): Connection? = null
+            override fun call(): Call = OkHttpClient().newCall(unknownRequest)
+            override fun connectTimeoutMillis(): Int = 10_000
+            override fun withConnectTimeout(timeout: Int, unit: TimeUnit): Interceptor.Chain = this
+            override fun readTimeoutMillis(): Int = 10_000
+            override fun withReadTimeout(timeout: Int, unit: TimeUnit): Interceptor.Chain = this
+            override fun writeTimeoutMillis(): Int = 10_000
+            override fun withWriteTimeout(timeout: Int, unit: TimeUnit): Interceptor.Chain = this
+        }
+        assertEquals(404, styleInterceptor.intercept(unknownChain).code)
+
+        // App-configured OkHttpClient must include DropTineStyleInterceptor
+        val okClient = ShadowHttpRequestUtil.capturedClient as OkHttpClient
+        assertTrue(okClient.interceptors.any { it is DropTineStyleInterceptor })
     }
 }
 

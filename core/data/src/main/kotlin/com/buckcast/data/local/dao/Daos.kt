@@ -4,6 +4,8 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Update
+import androidx.room.Upsert
 import com.buckcast.data.local.entities.AppSettingsEntity
 import com.buckcast.data.local.entities.EntitlementCacheEntity
 import com.buckcast.data.local.entities.FieldLogEntity
@@ -26,11 +28,15 @@ interface StandDao {
     @Query("SELECT * FROM stands")
     suspend fun getAllStandsOnce(): List<StandEntity>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    // @Upsert performs UPDATE when primary key exists so ON DELETE CASCADE never wipes sits/routes.
+    @Upsert
     suspend fun upsertStand(stand: StandEntity)
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun upsertStands(stands: List<StandEntity>)
+
+    @Update
+    suspend fun updateStand(stand: StandEntity)
 
     @Query("DELETE FROM stands WHERE id = :standId")
     suspend fun deleteStandById(standId: String)

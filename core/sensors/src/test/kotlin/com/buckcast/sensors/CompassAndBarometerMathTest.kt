@@ -23,28 +23,93 @@ import kotlin.math.sin
 class CompassAndBarometerMathTest {
 
     @Test
-    fun `skyward posture switches above 55 deg with 5 deg hysteresis and nose-down tilts never flip upright`() {
+    fun `treestand aim posture switches at -45 deg with cos(37) hysteresis and nose-down r7 less or eq 0_20 never flips upright`() {
         var posture = CompassPosture.FLAT_MAP
 
-        // 55° exactly stays FLAT_MAP
-        posture = CompassFusionMath.resolvePostureFromSkywardZ(sin(Math.toRadians(55.0)), posture)
+        // Steep aim down -50 deg (skywardPitch = 40 deg -> r8 = cos(40)=0.766 > cos(45)) stays FLAT_MAP
+        posture = CompassFusionMath.resolvePostureFromSkywardZ(
+            r7 = sin(Math.toRadians(40.0)),
+            previousPosture = posture,
+            r8 = cos(Math.toRadians(40.0)),
+        )
         assertEquals(CompassPosture.FLAT_MAP, posture)
 
-        // Nose-down -70° (r7 < 0) stays FLAT_MAP
-        posture = CompassFusionMath.resolvePostureFromSkywardZ(sin(Math.toRadians(-70.0)), posture)
+        // Nose-down / upside-down (r7 <= 0.20) stays FLAT_MAP even if r8 < 0.707
+        posture = CompassFusionMath.resolvePostureFromSkywardZ(
+            r7 = -0.5,
+            previousPosture = posture,
+            r8 = 0.5,
+        )
         assertEquals(CompassPosture.FLAT_MAP, posture)
 
-        // Skyward 56° enters UPRIGHT_AIMING
-        posture = CompassFusionMath.resolvePostureFromSkywardZ(sin(Math.toRadians(56.0)), posture)
+        // Treestand aim -44 deg (skywardPitch = 46 deg -> r8 = cos(46) < 0.707, r7 = sin(46)=0.719 > 0.20) enters UPRIGHT_AIMING
+        posture = CompassFusionMath.resolvePostureFromSkywardZ(
+            r7 = sin(Math.toRadians(46.0)),
+            previousPosture = posture,
+            r8 = cos(Math.toRadians(46.0)),
+        )
         assertEquals(CompassPosture.UPRIGHT_AIMING, posture)
 
-        // 52° inside hysteresis band holds UPRIGHT_AIMING
-        posture = CompassFusionMath.resolvePostureFromSkywardZ(sin(Math.toRadians(52.0)), posture)
+        // -50 deg inside hysteresis band (r8 = cos(40)=0.766 <= cos(37)=0.799) holds UPRIGHT_AIMING
+        posture = CompassFusionMath.resolvePostureFromSkywardZ(
+            r7 = sin(Math.toRadians(40.0)),
+            previousPosture = posture,
+            r8 = cos(Math.toRadians(40.0)),
+        )
         assertEquals(CompassPosture.UPRIGHT_AIMING, posture)
 
-        // 49° drops back to FLAT_MAP
-        posture = CompassFusionMath.resolvePostureFromSkywardZ(sin(Math.toRadians(49.0)), posture)
+        // Flatter than -53 deg (skywardPitch = 36 deg -> r8 = cos(36)=0.809 > 0.799) drops back to FLAT_MAP
+        posture = CompassFusionMath.resolvePostureFromSkywardZ(
+            r7 = sin(Math.toRadians(36.0)),
+            previousPosture = posture,
+            r8 = cos(Math.toRadians(36.0)),
+        )
         assertEquals(CompassPosture.FLAT_MAP, posture)
+    }
+
+    @Test
+    fun `treestand aim-down (-45, -30, 0 level, +20 uphill) maintains under 0_5 deg azimuth continuity across headings 0, 90, 118, 215, 330`() {
+        val targetHeadings = listOf(0.0, 90.0, 118.0, 215.0, 330.0)
+        // Camera aim pitch = skywardPitch - 90 deg -> aimDeg in {-45, -30, 0, +20}
+        val treestandAimAngles = listOf(-45.0, -30.0, 0.0, 20.0)
+
+        for (heading in targetHeadings) {
+            for (aimDeg in treestandAimAngles) {
+                val skywardPitchDeg = 90.0 + aimDeg
+                val rotVec = buildQuaternionRotationVector(headingDeg = heading, skywardPitchDeg = skywardPitchDeg)
+                val rawMatrix = FloatArray(9)
+                val remappedMatrix = FloatArray(9)
+                SensorManager.getRotationMatrixFromVector(rawMatrix, rotVec)
+                val (axisX, axisY) = CompassFusionMath.displayAxisRemapFor(Surface.ROTATION_0)
+                SensorManager.remapCoordinateSystem(rawMatrix, axisX, axisY, remappedMatrix)
+
+                val posture = CompassFusionMath.resolvePostureFromSkywardZ(
+                    r7 = remappedMatrix[7].toDouble(),
+                    previousPosture = CompassPosture.FLAT_MAP,
+                    r8 = remappedMatrix[8].toDouble(),
+                )
+                assertEquals(
+                    "Expected UPRIGHT_AIMING at treestand aimDeg=$aimDeg° for heading=$heading°",
+                    CompassPosture.UPRIGHT_AIMING,
+                    posture,
+                )
+
+                val measuredPitch = CompassFusionMath.extractAimPitchDeg(remappedMatrix)
+                assertEquals(
+                    "Aim pitch mismatch at aimDeg=$aimDeg°",
+                    aimDeg,
+                    measuredPitch,
+                    0.5,
+                )
+
+                val extracted = CompassFusionMath.extractMagneticAzimuthFromMatrix(remappedMatrix, posture)
+                val delta = AngleMath.angularDistanceDegrees(heading, extracted)
+                assertTrue(
+                    "Treestand heading=$heading° aim=$aimDeg° produced $extracted° (delta=$delta°)",
+                    delta < 0.5,
+                )
+            }
+        }
     }
 
     @Test
@@ -97,7 +162,7 @@ class CompassAndBarometerMathTest {
     }
 
     @Test
-    fun `computeTrueHeading applies declination, formats 359_98 as 0_0, and smooths across 0-360 seam`() {
+    fun `computeTrueHeading applies declination, manual trim offset clamped to +-15 deg, and smooths across 0-360 seam`() {
         val initial = CompassFusionMath.computeTrueHeading(
             magneticAzimuthDeg = 358.0,
             declinationDeg = 5.0,
@@ -114,16 +179,37 @@ class CompassAndBarometerMathTest {
         assertEquals(0.5, smoothed, 1e-6)
         assertTrue(smoothed in 0.0..<360.0)
 
+        // Offset of +25° clamps to +15°, -25° clamps to -15°
+        val clampedPlus = CompassFusionMath.computeTrueHeading(
+            magneticAzimuthDeg = 355.0,
+            declinationDeg = 0.0,
+            previousSmoothedDeg = null,
+            compassOffsetDeg = 25.0,
+        )
+        assertEquals(10.0, clampedPlus, 1e-6)
+
+        val clampedMinus = CompassFusionMath.computeTrueHeading(
+            magneticAzimuthDeg = 5.0,
+            declinationDeg = 0.0,
+            previousSmoothedDeg = null,
+            compassOffsetDeg = -25.0,
+        )
+        assertEquals(350.0, clampedMinus, 1e-6)
+
         assertEquals("0.0°", CompassFusionMath.formatHeadingTenths(359.98))
         assertEquals("0.0°", CompassFusionMath.formatHeadingTenths(-0.02))
     }
 
     @Test
-    fun `mapAccuracy flags low and unreliable magnetometer states as CALIBRATION_NEEDED`() {
+    fun `mapAccuracy maps all 4 Android sensor statuses and flags LOW and UNRELIABLE as needsCalibration`() {
         assertEquals(CompassAccuracy.HIGH, CompassFusionMath.mapAccuracy(SensorManager.SENSOR_STATUS_ACCURACY_HIGH))
+        assertFalse(CompassAccuracy.HIGH.needsCalibration)
         assertEquals(CompassAccuracy.MEDIUM, CompassFusionMath.mapAccuracy(SensorManager.SENSOR_STATUS_ACCURACY_MEDIUM))
-        assertEquals(CompassAccuracy.CALIBRATION_NEEDED, CompassFusionMath.mapAccuracy(SensorManager.SENSOR_STATUS_ACCURACY_LOW))
-        assertEquals(CompassAccuracy.CALIBRATION_NEEDED, CompassFusionMath.mapAccuracy(SensorManager.SENSOR_STATUS_UNRELIABLE))
+        assertFalse(CompassAccuracy.MEDIUM.needsCalibration)
+        assertEquals(CompassAccuracy.LOW, CompassFusionMath.mapAccuracy(SensorManager.SENSOR_STATUS_ACCURACY_LOW))
+        assertTrue(CompassAccuracy.LOW.needsCalibration)
+        assertEquals(CompassAccuracy.UNRELIABLE, CompassFusionMath.mapAccuracy(SensorManager.SENSOR_STATUS_UNRELIABLE))
+        assertTrue(CompassAccuracy.UNRELIABLE.needsCalibration)
     }
 
     @Test

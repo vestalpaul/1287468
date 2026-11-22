@@ -1,0 +1,821 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 3,
+    "identityHash": "bc68591292f4254e72f763b6d42a3c38",
+    "entities": [
+      {
+        "tableName": "stands",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `latitude` REAL NOT NULL, `longitude` REAL NOT NULL, `elevationFeet` REAL, `slopeAspectDeg` REAL, `slopeGradePercent` REAL, `standType` TEXT NOT NULL, `standHeightFeet` REAL NOT NULL, `terrainPosition` TEXT NOT NULL, `preferredWindSectorsJson` TEXT NOT NULL, `notes` TEXT NOT NULL, `createdAtEpochMs` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "latitude",
+            "columnName": "latitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "longitude",
+            "columnName": "longitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "elevationFeet",
+            "columnName": "elevationFeet",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "slopeAspectDeg",
+            "columnName": "slopeAspectDeg",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "slopeGradePercent",
+            "columnName": "slopeGradePercent",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "standType",
+            "columnName": "standType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "standHeightFeet",
+            "columnName": "standHeightFeet",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "terrainPosition",
+            "columnName": "terrainPosition",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "preferredWindSectorsJson",
+            "columnName": "preferredWindSectorsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtEpochMs",
+            "columnName": "createdAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "stand_routes",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `standId` TEXT NOT NULL, `routeType` TEXT NOT NULL, `polylineJson` TEXT NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`standId`) REFERENCES `stands`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "standId",
+            "columnName": "standId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "routeType",
+            "columnName": "routeType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "polylineJson",
+            "columnName": "polylineJson",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_stand_routes_standId",
+            "unique": false,
+            "columnNames": [
+              "standId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_stand_routes_standId` ON `${TABLE_NAME}` (`standId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "stands",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "standId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "stand_sits",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `standId` TEXT NOT NULL, `startTimeEpochMs` INTEGER NOT NULL, `endTimeEpochMs` INTEGER NOT NULL, `windedDeer` INTEGER NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`standId`) REFERENCES `stands`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "standId",
+            "columnName": "standId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startTimeEpochMs",
+            "columnName": "startTimeEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endTimeEpochMs",
+            "columnName": "endTimeEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "windedDeer",
+            "columnName": "windedDeer",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_stand_sits_standId",
+            "unique": false,
+            "columnNames": [
+              "standId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_stand_sits_standId` ON `${TABLE_NAME}` (`standId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "stands",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "standId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "waypoints",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `category` TEXT NOT NULL, `name` TEXT NOT NULL, `latitude` REAL NOT NULL, `longitude` REAL NOT NULL, `elevationFeet` REAL, `notes` TEXT NOT NULL, `createdAtEpochMs` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "category",
+            "columnName": "category",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "latitude",
+            "columnName": "latitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "longitude",
+            "columnName": "longitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "elevationFeet",
+            "columnName": "elevationFeet",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtEpochMs",
+            "columnName": "createdAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "track_sessions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `trackType` TEXT NOT NULL, `startedAtEpochMs` INTEGER NOT NULL, `endedAtEpochMs` INTEGER, `notes` TEXT NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "trackType",
+            "columnName": "trackType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startedAtEpochMs",
+            "columnName": "startedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endedAtEpochMs",
+            "columnName": "endedAtEpochMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "track_points",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `sessionId` TEXT NOT NULL, `latitude` REAL NOT NULL, `longitude` REAL NOT NULL, `elevationFeet` REAL, `recordedAtEpochMs` INTEGER NOT NULL, FOREIGN KEY(`sessionId`) REFERENCES `track_sessions`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sessionId",
+            "columnName": "sessionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "latitude",
+            "columnName": "latitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "longitude",
+            "columnName": "longitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "elevationFeet",
+            "columnName": "elevationFeet",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "recordedAtEpochMs",
+            "columnName": "recordedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_track_points_sessionId",
+            "unique": false,
+            "columnNames": [
+              "sessionId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_track_points_sessionId` ON `${TABLE_NAME}` (`sessionId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "track_sessions",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "sessionId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "field_logs",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `standId` TEXT, `notes` TEXT NOT NULL, `photoUrisJson` TEXT NOT NULL, `latitude` REAL NOT NULL, `longitude` REAL NOT NULL, `elevationFeet` REAL, `weatherSnapshotJson` TEXT, `rutPhaseNumber` INTEGER, `createdAtEpochMs` INTEGER NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`standId`) REFERENCES `stands`(`id`) ON UPDATE NO ACTION ON DELETE SET NULL )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "standId",
+            "columnName": "standId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "photoUrisJson",
+            "columnName": "photoUrisJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "latitude",
+            "columnName": "latitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "longitude",
+            "columnName": "longitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "elevationFeet",
+            "columnName": "elevationFeet",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "weatherSnapshotJson",
+            "columnName": "weatherSnapshotJson",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "rutPhaseNumber",
+            "columnName": "rutPhaseNumber",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "createdAtEpochMs",
+            "columnName": "createdAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_field_logs_standId",
+            "unique": false,
+            "columnNames": [
+              "standId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_field_logs_standId` ON `${TABLE_NAME}` (`standId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "stands",
+            "onDelete": "SET NULL",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "standId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "sightings",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `standId` TEXT, `deerClass` TEXT NOT NULL, `count` INTEGER NOT NULL, `travelBearingDeg` REAL, `distanceYards` REAL, `weatherSnapshotJson` TEXT, `observedAtEpochMs` INTEGER NOT NULL, `notes` TEXT NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`standId`) REFERENCES `stands`(`id`) ON UPDATE NO ACTION ON DELETE SET NULL )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "standId",
+            "columnName": "standId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "deerClass",
+            "columnName": "deerClass",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "count",
+            "columnName": "count",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "travelBearingDeg",
+            "columnName": "travelBearingDeg",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "distanceYards",
+            "columnName": "distanceYards",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "weatherSnapshotJson",
+            "columnName": "weatherSnapshotJson",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "observedAtEpochMs",
+            "columnName": "observedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_sightings_standId",
+            "unique": false,
+            "columnNames": [
+              "standId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sightings_standId` ON `${TABLE_NAME}` (`standId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "stands",
+            "onDelete": "SET NULL",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "standId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "weather_cache",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`gridKey` TEXT NOT NULL, `latitude` REAL NOT NULL, `longitude` REAL NOT NULL, `elevationFeet` REAL NOT NULL, `timezoneId` TEXT NOT NULL, `fetchedAtEpochMs` INTEGER NOT NULL, `rawPayloadJson` TEXT NOT NULL, PRIMARY KEY(`gridKey`))",
+        "fields": [
+          {
+            "fieldPath": "gridKey",
+            "columnName": "gridKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "latitude",
+            "columnName": "latitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "longitude",
+            "columnName": "longitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "elevationFeet",
+            "columnName": "elevationFeet",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timezoneId",
+            "columnName": "timezoneId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fetchedAtEpochMs",
+            "columnName": "fetchedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rawPayloadJson",
+            "columnName": "rawPayloadJson",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "gridKey"
+          ]
+        }
+      },
+      {
+        "tableName": "weapon_profiles",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `weaponType` TEXT NOT NULL, `zeroYards` REAL NOT NULL, `dropTableJson` TEXT NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "weaponType",
+            "columnName": "weaponType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "zeroYards",
+            "columnName": "zeroYards",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dropTableJson",
+            "columnName": "dropTableJson",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "app_settings",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `lastKnownLat` REAL, `lastKnownLon` REAL, `peakRutMonthDay` TEXT NOT NULL, `legalLightBeforeSunriseMinutes` INTEGER NOT NULL, `legalLightAfterSunsetMinutes` INTEGER NOT NULL, `stealthModeEnabled` INTEGER NOT NULL, `themePreset` TEXT NOT NULL, `compassOffsetDeg` REAL NOT NULL, `customScorerWeightsJson` TEXT, `updatedAtEpochMs` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastKnownLat",
+            "columnName": "lastKnownLat",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "lastKnownLon",
+            "columnName": "lastKnownLon",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "peakRutMonthDay",
+            "columnName": "peakRutMonthDay",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "legalLightBeforeSunriseMinutes",
+            "columnName": "legalLightBeforeSunriseMinutes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "legalLightAfterSunsetMinutes",
+            "columnName": "legalLightAfterSunsetMinutes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stealthModeEnabled",
+            "columnName": "stealthModeEnabled",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "themePreset",
+            "columnName": "themePreset",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "compassOffsetDeg",
+            "columnName": "compassOffsetDeg",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "customScorerWeightsJson",
+            "columnName": "customScorerWeightsJson",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "updatedAtEpochMs",
+            "columnName": "updatedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "entitlement_cache",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `localFirstLaunchEpochMs` INTEGER NOT NULL, `serverFirstSeenEpochMs` INTEGER, `maxObservedEpochMs` INTEGER NOT NULL, `lastKnownTier` TEXT NOT NULL, `lastKnownSource` TEXT NOT NULL, `subscriptionExpiresEpochMs` INTEGER, `lastVerifiedEpochMs` INTEGER, `debugOverride` TEXT NOT NULL, `supportUserId` TEXT NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "localFirstLaunchEpochMs",
+            "columnName": "localFirstLaunchEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "serverFirstSeenEpochMs",
+            "columnName": "serverFirstSeenEpochMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "maxObservedEpochMs",
+            "columnName": "maxObservedEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastKnownTier",
+            "columnName": "lastKnownTier",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastKnownSource",
+            "columnName": "lastKnownSource",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "subscriptionExpiresEpochMs",
+            "columnName": "subscriptionExpiresEpochMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "lastVerifiedEpochMs",
+            "columnName": "lastVerifiedEpochMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "debugOverride",
+            "columnName": "debugOverride",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "supportUserId",
+            "columnName": "supportUserId",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'bc68591292f4254e72f763b6d42a3c38')"
+    ]
+  }
+}

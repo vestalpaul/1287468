@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -349,7 +350,7 @@ private fun HeroTodayCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                     Text(
                         text = "${temp.toInt()}°F",
                         style = MaterialTheme.typography.displaySmall,
@@ -409,12 +410,18 @@ private fun RatingPill(session: String, rating: MovementRating, score: Int) {
         MovementRating.OKAY -> MaterialTheme.colorScheme.surfaceVariant
         MovementRating.SLOW -> MaterialTheme.colorScheme.errorContainer
     }
-    Surface(color = bg, shape = MaterialTheme.shapes.small) {
+    Surface(
+        color = bg,
+        shape = MaterialTheme.shapes.small,
+        modifier = Modifier.widthIn(min = 68.dp),
+    ) {
         Text(
             text = "$session ${rating.label} $score",
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            softWrap = false,
         )
     }
 }

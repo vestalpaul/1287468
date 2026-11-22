@@ -54,6 +54,25 @@ import java.util.UUID
 import javax.inject.Inject
 import kotlin.math.abs
 
+enum class MapOrientationMode {
+    NORTH_UP,
+    HEADING_UP,
+}
+
+fun computeNextMapBearing(
+    currentDeg: Double,
+    targetDeg: Double,
+    alpha: Double = 0.25,
+    deadbandDeg: Double = 0.5,
+): Double? {
+    if (!currentDeg.isFinite() || !targetDeg.isFinite()) return null
+    val current = AngleMath.normalizeDegrees(currentDeg)
+    val target = AngleMath.normalizeDegrees(targetDeg)
+    val delta = AngleMath.signedDeltaDegrees(current, target)
+    if (abs(delta) < deadbandDeg) return null
+    return AngleMath.normalizeDegrees(current + alpha * delta)
+}
+
 data class MapCameraState(
     val latitude: Double = DEFAULT_LAT,
     val longitude: Double = DEFAULT_LON,
@@ -85,6 +104,8 @@ data class ScoutTargetResult(
 
 data class MapUiState(
     val camera: MapCameraState = MapCameraState(),
+    val orientationMode: MapOrientationMode = MapOrientationMode.NORTH_UP,
+    val snapNorthNonce: Long = 0L,
     val baseLayer: MapBaseLayer = MapBaseLayer.TOPO,
     val showHillshade: Boolean = false,
     val showRangeRings: Boolean = false,
@@ -108,6 +129,7 @@ data class MapUiState(
     val lockedWaypointIds: Set<String> = emptySet(),
     val routes: List<StandRoute> = emptyList(),
     val routeDrawing: RouteDrawingState? = null,
+    val repositioningStandName: String? = null,
     val entitlement: EntitlementState = EntitlementState(
         tier = SubscriptionTier.SCOUT,
         source = EntitlementSource.NONE,
@@ -139,6 +161,8 @@ class MapViewModel @Inject constructor(
 ) : ViewModel() {
 
     private val cameraFlow = MutableStateFlow(MapCameraState())
+    private val orientationModeFlow = MutableStateFlow(MapOrientationMode.NORTH_UP)
+    private val snapNorthNonceFlow = MutableStateFlow(0L)
     private val baseLayerFlow = MutableStateFlow(MapBaseLayer.TOPO)
     private val showHillshadeFlow = MutableStateFlow(false)
     private val showRangeRingsFlow = MutableStateFlow(false)
@@ -146,6 +170,7 @@ class MapViewModel @Inject constructor(
     private val scoutTargetFlow = MutableStateFlow<GeoPoint?>(null)
     private val projectedStandIdFlow = MutableStateFlow<String?>(null)
     private val routeDrawingFlow = MutableStateFlow<RouteDrawingState?>(null)
+    private val repositioningStandNameFlow = MutableStateFlow<String?>(null)
     private val statusMessageFlow = MutableStateFlow<String?>(null)
 
     private var previousWindAlignmentBadge: WindAlignmentBadge? = null
@@ -168,7 +193,9 @@ class MapViewModel @Inject constructor(
         }
 
     private val layerAndToolFlow = combine(
-        cameraFlow,
+        combine(cameraFlow, orientationModeFlow, snapNorthNonceFlow) { cam, orient, snapNonce ->
+            Triple(cam, orient, snapNonce)
+        },
         baseLayerFlow,
         showHillshadeFlow,
         showRangeRingsFlow,
@@ -176,14 +203,16 @@ class MapViewModel @Inject constructor(
             scoutModeFlow,
             scoutTargetFlow,
             projectedStandIdFlow,
-            routeDrawingFlow,
+            combine(routeDrawingFlow, repositioningStandNameFlow) { drawing, repoName -> drawing to repoName },
             statusMessageFlow,
-        ) { scoutEnabled, scoutTarget, projectedStandId, routeDrawing, status ->
-            ToolExtras(scoutEnabled, scoutTarget, projectedStandId, routeDrawing, status)
+        ) { scoutEnabled, scoutTarget, projectedStandId, drawAndRepo, status ->
+            ToolExtras(scoutEnabled, scoutTarget, projectedStandId, drawAndRepo.first, drawAndRepo.second, status)
         },
-    ) { camera, baseLayer, showHillshade, showRangeRings, extras ->
+    ) { cameraAndOrient, baseLayer, showHillshade, showRangeRings, extras ->
         LayerToolState(
-            camera = camera,
+            camera = cameraAndOrient.first,
+            orientationMode = cameraAndOrient.second,
+            snapNorthNonce = cameraAndOrient.third,
             baseLayer = baseLayer,
             showHillshade = showHillshade,
             showRangeRings = showRangeRings,
@@ -191,6 +220,7 @@ class MapViewModel @Inject constructor(
             scoutTarget = extras.scoutTarget,
             projectedStandId = extras.projectedStandId,
             routeDrawing = extras.routeDrawing,
+            repositioningStandName = extras.repositioningStandName,
             statusMessage = extras.status,
         )
     }
@@ -286,6 +316,27 @@ class MapViewModel @Inject constructor(
             hasCenteredOnGps = true,
             jumpNonce = cameraFlow.value.jumpNonce + 1L,
         )
+    }
+
+    fun toggleOrientationMode() {
+        val next = when (orientationModeFlow.value) {
+            MapOrientationMode.NORTH_UP -> MapOrientationMode.HEADING_UP
+            MapOrientationMode.HEADING_UP -> {
+                snapNorthNonceFlow.value += 1L
+                MapOrientationMode.NORTH_UP
+            }
+        }
+        orientationModeFlow.value = next
+    }
+
+    fun onUserManualRotate() {
+        if (orientationModeFlow.value == MapOrientationMode.HEADING_UP) {
+            orientationModeFlow.value = MapOrientationMode.NORTH_UP
+        }
+    }
+
+    fun recalibrateCompass() {
+        compass.recalibrate()
     }
 
     fun selectBaseLayer(layer: MapBaseLayer): Boolean {
@@ -393,6 +444,7 @@ class MapViewModel @Inject constructor(
         if (scoutModeFlow.value && entitlementState.value.hasAccess(AlphaFeature.SCENT_THERMAL_CONES)) {
             projectedStandIdFlow.value = null
             scoutTargetFlow.value = point
+            statusMessageFlow.value = null
         }
     }
 
@@ -441,6 +493,17 @@ class MapViewModel @Inject constructor(
     fun cancelRouteDrawing() {
         routeDrawingFlow.value = null
         statusMessageFlow.value = null
+    }
+
+    fun startStandReposition(standName: String) {
+        scoutModeFlow.value = false
+        scoutTargetFlow.value = null
+        routeDrawingFlow.value = null
+        repositioningStandNameFlow.value = standName.trim().ifBlank { "Stand" }
+    }
+
+    fun cancelStandReposition() {
+        repositioningStandNameFlow.value = null
     }
 
     fun clearMessage() {
@@ -536,6 +599,8 @@ class MapViewModel @Inject constructor(
 
         val effectiveScentToDeg = thermalDrift?.effectiveScentToDeg ?: AngleMath.oppositeBearing(windFromDeg)
 
+        compass.setCompassOffsetDeg(data.settings.compassOffsetDeg)
+
         val formattedHeading = if (compassReading.isSensorAvailable) {
             CompassFusionMath.formatHeadingTenths(compassReading.trueHeadingDeg)
         } else {
@@ -611,6 +676,8 @@ class MapViewModel @Inject constructor(
 
         return MapUiState(
             camera = effectiveCamera,
+            orientationMode = tools.orientationMode,
+            snapNorthNonce = tools.snapNorthNonce,
             baseLayer = effectiveBaseLayer,
             showHillshade = effectiveHillshade,
             showRangeRings = effectiveRangeRings,
@@ -634,6 +701,7 @@ class MapViewModel @Inject constructor(
             lockedWaypointIds = lockedWaypointIds,
             routes = data.routes,
             routeDrawing = tools.routeDrawing,
+            repositioningStandName = tools.repositioningStandName,
             entitlement = entitlement,
             canUseAlphaLayers = canUseAlphaLayers,
             canUseScentCones = canUseScentCones,
@@ -648,11 +716,14 @@ class MapViewModel @Inject constructor(
         val scoutTarget: GeoPoint?,
         val projectedStandId: String?,
         val routeDrawing: RouteDrawingState?,
+        val repositioningStandName: String?,
         val status: String?,
     )
 
     private data class LayerToolState(
         val camera: MapCameraState,
+        val orientationMode: MapOrientationMode,
+        val snapNorthNonce: Long,
         val baseLayer: MapBaseLayer,
         val showHillshade: Boolean,
         val showRangeRings: Boolean,
@@ -660,6 +731,7 @@ class MapViewModel @Inject constructor(
         val scoutTarget: GeoPoint?,
         val projectedStandId: String?,
         val routeDrawing: RouteDrawingState?,
+        val repositioningStandName: String?,
         val statusMessage: String?,
     )
 

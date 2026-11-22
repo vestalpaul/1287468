@@ -6,11 +6,17 @@ import com.buckcast.domain.entitlement.EntitlementSnapshot
 import com.buckcast.domain.entitlement.EntitlementSource
 import com.buckcast.domain.entitlement.EntitlementState
 import com.buckcast.domain.entitlement.SubscriptionTier
+import com.buckcast.domain.math.GeoPoint
 import com.buckcast.domain.model.AppRuntimeConfig
 import com.buckcast.domain.model.AppSettings
 import com.buckcast.domain.model.AppThemePreset
 import com.buckcast.domain.repository.EntitlementRepository
 import com.buckcast.domain.repository.SettingsRepository
+import com.buckcast.sensors.CompassAccuracy
+import com.buckcast.sensors.CompassPosture
+import com.buckcast.sensors.CompassReading
+import com.buckcast.sensors.CompassSensorSource
+import com.buckcast.sensors.RotationVectorCompass
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -52,6 +58,7 @@ class SettingsViewModelTest {
             settingsRepository = fakeSettingsRepo,
             entitlementRepository = fakeEntitlementRepo,
             runtimeConfig = AppRuntimeConfig(isDebugBuild = true, revenueCatPublicKey = "", mapTilerApiKey = ""),
+            compass = FakeCompass(),
         )
         val collectJob = launch { vm.uiState.collect() }
         advanceUntilIdle()
@@ -80,6 +87,7 @@ class SettingsViewModelTest {
             settingsRepository = fakeSettingsRepo,
             entitlementRepository = fakeEntitlementRepo,
             runtimeConfig = AppRuntimeConfig(isDebugBuild = false, revenueCatPublicKey = "", mapTilerApiKey = ""),
+            compass = FakeCompass(),
         )
         val collectJob = launch { vm.uiState.collect() }
         advanceUntilIdle()
@@ -104,6 +112,7 @@ class SettingsViewModelTest {
                 settingsRepository = fakeSettingsRepo,
                 entitlementRepository = fakeEntitlementRepo,
                 runtimeConfig = AppRuntimeConfig(isDebugBuild = true, revenueCatPublicKey = "", mapTilerApiKey = ""),
+                compass = FakeCompass(),
             )
             val collectJob = launch { vm.uiState.collect() }
             advanceUntilIdle()
@@ -135,8 +144,93 @@ class SettingsViewModelTest {
             collectJob.cancel()
         }
 
-    private class FakeSettingsRepo : SettingsRepository {
-        private val flow = MutableStateFlow(AppSettings())
+    @Test
+    fun `compass trim offset clamps to +-15 deg, persists to settings, syncs RotationVectorCompass, and recalibrate resets sensor fusion`() =
+        runTest(testDispatcher) {
+            val fakeSettingsRepo = FakeSettingsRepo(
+                AppSettings(lastKnownLat = 41.5868, lastKnownLon = -93.6250),
+            )
+            val fakeEntitlementRepo = FakeEntitlementRepo(isAlpha = false)
+            val fakeCompass = FakeCompass()
+            val vm = SettingsViewModel(
+                settingsRepository = fakeSettingsRepo,
+                entitlementRepository = fakeEntitlementRepo,
+                runtimeConfig = AppRuntimeConfig(isDebugBuild = true, revenueCatPublicKey = "", mapTilerApiKey = ""),
+                compass = fakeCompass,
+            )
+            val collectJob = launch { vm.uiState.collect() }
+            advanceUntilIdle()
+
+            assertEquals(GeoPoint(41.5868, -93.6250), fakeCompass.seededLocation)
+
+            // Live GPS fix takes precedence and is not overwritten by subsequent settings emissions
+            val liveFix = GeoPoint(42.0000, -94.0000)
+            fakeCompass.updateLocation(liveFix)
+            vm.updateCompassOffsetDeg(4.2) // snaps to nearest 0.5 -> 4.0
+            advanceUntilIdle()
+            assertEquals(4.0, vm.uiState.value.settings.compassOffsetDeg, 1e-6)
+            assertEquals(4.0, fakeCompass.getCompassOffsetDeg(), 1e-6)
+            assertEquals(liveFix, fakeCompass.seededLocation)
+
+            // Out of bounds clamps cleanly to +15.0 / -15.0
+            vm.updateCompassOffsetDeg(28.0)
+            advanceUntilIdle()
+            assertEquals(15.0, vm.uiState.value.settings.compassOffsetDeg, 1e-6)
+            assertEquals(15.0, fakeCompass.getCompassOffsetDeg(), 1e-6)
+
+            vm.updateCompassOffsetDeg(-22.0)
+            advanceUntilIdle()
+            assertEquals(-15.0, vm.uiState.value.settings.compassOffsetDeg, 1e-6)
+
+            vm.recalibrateCompass()
+            advanceUntilIdle()
+            assertEquals(1, fakeCompass.recalibrateCalls)
+            assertEquals("Compass sensor fusion reset", vm.uiState.value.statusMessage)
+
+            collectJob.cancel()
+        }
+
+    private class FakeCompass : RotationVectorCompass() {
+        var recalibrateCalls = 0
+            private set
+        var seededLocation: GeoPoint? = null
+            private set
+
+        override fun updateLocation(point: GeoPoint?) {
+            super.updateLocation(point)
+            seededLocation = point
+        }
+
+        override fun updateLocationIfUnset(point: GeoPoint) {
+            super.updateLocationIfUnset(point)
+            if (seededLocation == null) {
+                seededLocation = point
+            }
+        }
+
+        override fun recalibrate() {
+            recalibrateCalls++
+        }
+
+        override fun observeHeading(): Flow<CompassReading> = MutableStateFlow(
+            CompassReading(
+                trueHeadingDeg = 180.0,
+                magneticHeadingDeg = 178.0,
+                declinationDeg = 2.0,
+                pitchDeg = 0.0,
+                posture = CompassPosture.UPRIGHT_AIMING,
+                accuracy = CompassAccuracy.HIGH,
+                sensorSource = CompassSensorSource.ROTATION_VECTOR,
+                isSensorAvailable = true,
+                timestampEpochMs = 1_000L,
+            ),
+        )
+    }
+
+    private class FakeSettingsRepo(
+        initial: AppSettings = AppSettings(),
+    ) : SettingsRepository {
+        private val flow = MutableStateFlow(initial)
         override fun observeSettings(): Flow<AppSettings> = flow
         override suspend fun getSettings(): AppSettings = flow.value
         override suspend fun updateLastKnownLocation(latitude: Double, longitude: Double) {

@@ -9,17 +9,22 @@ import android.hardware.display.DisplayManager
 import android.view.Display
 import android.view.Surface
 import com.buckcast.domain.math.GeoPoint
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flatMapLatest
 import java.util.concurrent.atomic.AtomicReference
 
 /**
  * True-north hardware compass fusing `Sensor.TYPE_ROTATION_VECTOR` (with automatic fallback
  * to `Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR` on gyroless devices), display-rotation remapping,
- * direct 3x3 matrix column projection (`+Y` flat vs `-Z` skyward upright aiming), circular EMA
- * smoothing (~20 Hz), and 10-mile cached `GeomagneticField` declination.
+ * direct 3x3 matrix column projection (`+Y` flat vs `-Z` treestand aim-down/upright),
+ * circular EMA smoothing (~20 Hz), manual trim offset, recalibration reset, and 10-mile cached
+ * `GeomagneticField` declination.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 open class RotationVectorCompass(
     private val context: Context?,
     private val sensorManager: SensorManager?,
@@ -27,13 +32,39 @@ open class RotationVectorCompass(
     protected constructor() : this(null, null)
 
     private val currentLocation = AtomicReference<GeoPoint?>(null)
+    private val compassOffsetDeg = AtomicReference(0.0)
+    private val recalibrationNonce = MutableStateFlow(0L)
     private val declinationCache = DeclinationCache()
 
     open fun updateLocation(point: GeoPoint?) {
         currentLocation.set(point)
     }
 
-    open fun observeHeading(): Flow<CompassReading> = callbackFlow {
+    open fun updateLocationIfUnset(point: GeoPoint) {
+        currentLocation.compareAndSet(null, point)
+    }
+
+    open fun setCompassOffsetDeg(offsetDeg: Double) {
+        if (!offsetDeg.isFinite()) return
+        compassOffsetDeg.set(
+            offsetDeg.coerceIn(
+                CompassFusionMath.MIN_COMPASS_OFFSET_DEG,
+                CompassFusionMath.MAX_COMPASS_OFFSET_DEG,
+            ),
+        )
+    }
+
+    open fun getCompassOffsetDeg(): Double = compassOffsetDeg.get()
+
+    open fun recalibrate() {
+        recalibrationNonce.value += 1L
+    }
+
+    open fun observeHeading(): Flow<CompassReading> = recalibrationNonce.flatMapLatest {
+        observeHeadingSession()
+    }
+
+    private fun observeHeadingSession(): Flow<CompassReading> = callbackFlow {
         val sm = sensorManager
         val primarySensor = sm?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
         val fallbackSensor = if (primarySensor == null) {
@@ -56,7 +87,7 @@ open class RotationVectorCompass(
                     declinationDeg = 0.0,
                     pitchDeg = 0.0,
                     posture = CompassPosture.FLAT_MAP,
-                    accuracy = CompassAccuracy.CALIBRATION_NEEDED,
+                    accuracy = CompassAccuracy.UNRELIABLE,
                     sensorSource = CompassSensorSource.UNAVAILABLE,
                     isSensorAvailable = false,
                     timestampEpochMs = System.currentTimeMillis(),
@@ -85,7 +116,7 @@ open class RotationVectorCompass(
                 val (axisX, axisY) = CompassFusionMath.displayAxisRemapFor(displayRotation)
                 SensorManager.remapCoordinateSystem(rawMatrix, axisX, axisY, remappedMatrix)
 
-                val pitchDeg = CompassFusionMath.extractSkywardPitchDeg(remappedMatrix)
+                val pitchDeg = CompassFusionMath.extractAimPitchDeg(remappedMatrix)
                 currentPosture = CompassFusionMath.resolvePostureFromSkywardZ(
                     r7 = remappedMatrix[7].toDouble(),
                     previousPosture = currentPosture,
@@ -106,6 +137,7 @@ open class RotationVectorCompass(
                     magneticAzimuthDeg = magneticAzimuthDeg,
                     declinationDeg = declinationDeg,
                     previousSmoothedDeg = smoothedTrueHeading,
+                    compassOffsetDeg = compassOffsetDeg.get(),
                 )
                 smoothedTrueHeading = trueHeading
 

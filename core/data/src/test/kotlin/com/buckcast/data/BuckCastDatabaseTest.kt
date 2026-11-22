@@ -119,6 +119,21 @@ class BuckCastDatabaseTest {
         assertEquals(1, standRepo.observeRoutesForStand("stand-1").first().size)
         assertEquals(true, standRepo.observeSitsForStand("stand-1").first().first().windedDeer)
 
+        // Updating stand coordinates, name & preferred winds preserves routes and sits in SQLite
+        standRepo.updateStand(
+            stand.copy(
+                name = "South Ridge Pinch",
+                location = GeoPoint(41.5890, -93.6280, elevationFeet = 965.0),
+                preferredWindSectors = listOf(BearingSector(135.0, 225.0)),
+            ),
+        )
+        val updatedStands = standRepo.observeStands().first()
+        assertEquals(1, updatedStands.size)
+        assertEquals("South Ridge Pinch", updatedStands.first().name)
+        assertEquals(41.5890, updatedStands.first().location.latitude, 1e-6)
+        assertEquals(1, standRepo.observeRoutesForStand("stand-1").first().size)
+        assertEquals(1, standRepo.observeSitsForStand("stand-1").first().size)
+
         // Deleting stand cascades routes and sits
         standRepo.deleteStand("stand-1")
         assertTrue(standRepo.observeStands().first().isEmpty())

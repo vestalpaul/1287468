@@ -6,12 +6,17 @@ import com.buckcast.domain.entitlement.DebugEntitlementOverride
 import com.buckcast.domain.entitlement.EntitlementSource
 import com.buckcast.domain.entitlement.EntitlementState
 import com.buckcast.domain.entitlement.SubscriptionTier
+import com.buckcast.domain.math.GeoPoint
 import com.buckcast.domain.model.AppRuntimeConfig
 import com.buckcast.domain.model.AppSettings
 import com.buckcast.domain.model.AppThemePreset
 import com.buckcast.domain.repository.EntitlementRepository
 import com.buckcast.domain.repository.SettingsRepository
+import com.buckcast.sensors.CompassFusionMath
+import com.buckcast.sensors.CompassReading
+import com.buckcast.sensors.RotationVectorCompass
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -21,6 +26,7 @@ import kotlinx.coroutines.launch
 import java.time.MonthDay
 import java.util.Locale
 import javax.inject.Inject
+import kotlin.math.round
 
 data class SettingsUiState(
     val settings: AppSettings = AppSettings(),
@@ -45,10 +51,13 @@ class SettingsViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val entitlementRepository: EntitlementRepository,
     private val runtimeConfig: AppRuntimeConfig,
+    private val compass: RotationVectorCompass,
 ) : ViewModel() {
 
     private val busyFlow = MutableStateFlow(false)
     private val messageFlow = MutableStateFlow<String?>(null)
+
+    val liveCompassReading: Flow<CompassReading> = compass.observeHeading()
 
     val uiState: StateFlow<SettingsUiState> = combine(
         settingsRepository.observeSettings(),
@@ -56,6 +65,12 @@ class SettingsViewModel @Inject constructor(
         busyFlow,
         messageFlow,
     ) { settings, entitlement, busy, message ->
+        compass.setCompassOffsetDeg(settings.compassOffsetDeg)
+        val lat = settings.lastKnownLat
+        val lon = settings.lastKnownLon
+        if (lat != null && lon != null) {
+            compass.updateLocationIfUnset(GeoPoint(lat, lon))
+        }
         SettingsUiState(
             settings = settings,
             entitlement = entitlement,
@@ -73,6 +88,13 @@ class SettingsViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             entitlementRepository.ensureInitialized()
+            val initial = settingsRepository.getSettings()
+            compass.setCompassOffsetDeg(initial.compassOffsetDeg)
+            val lat = initial.lastKnownLat
+            val lon = initial.lastKnownLon
+            if (lat != null && lon != null) {
+                compass.updateLocationIfUnset(GeoPoint(lat, lon))
+            }
         }
     }
 
@@ -114,6 +136,24 @@ class SettingsViewModel @Inject constructor(
             )
             messageFlow.value = "Legal shooting light updated to -$beforeSunriseMinutes / +$afterSunsetMinutes min"
         }
+    }
+
+    fun updateCompassOffsetDeg(offsetDeg: Double) {
+        if (!offsetDeg.isFinite()) return
+        val snapped = (round(offsetDeg * 2.0) / 2.0).coerceIn(
+            CompassFusionMath.MIN_COMPASS_OFFSET_DEG,
+            CompassFusionMath.MAX_COMPASS_OFFSET_DEG,
+        )
+        compass.setCompassOffsetDeg(snapped)
+        viewModelScope.launch {
+            val current = settingsRepository.getSettings()
+            settingsRepository.updateSettings(current.copy(compassOffsetDeg = snapped))
+        }
+    }
+
+    fun recalibrateCompass() {
+        compass.recalibrate()
+        messageFlow.value = "Compass sensor fusion reset"
     }
 
     fun submitAccessCode(code: String) {

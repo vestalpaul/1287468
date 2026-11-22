@@ -267,6 +267,7 @@ class EntityMappers(private val json: Json) {
         stealthModeEnabled = entity.stealthModeEnabled,
         themePreset = AppThemePreset.entries.firstOrNull { it.name == entity.themePreset }
             ?: AppThemePreset.TIMBERLINE_DARK,
+        compassOffsetDeg = entity.compassOffsetDeg.takeIf { it.isFinite() }?.coerceIn(-15.0, 15.0) ?: 0.0,
         customScorerWeights = entity.customScorerWeightsJson?.let { json.decodeFromString<Map<String, Double>>(it) },
         updatedAtEpochMs = entity.updatedAtEpochMs,
     )
@@ -280,6 +281,7 @@ class EntityMappers(private val json: Json) {
         legalLightAfterSunsetMinutes = domain.legalLightAfterSunsetMinutes,
         stealthModeEnabled = domain.stealthModeEnabled,
         themePreset = domain.themePreset.name,
+        compassOffsetDeg = domain.compassOffsetDeg.takeIf { it.isFinite() }?.coerceIn(-15.0, 15.0) ?: 0.0,
         customScorerWeightsJson = domain.customScorerWeights?.let { json.encodeToString(it) },
         updatedAtEpochMs = domain.updatedAtEpochMs,
     )

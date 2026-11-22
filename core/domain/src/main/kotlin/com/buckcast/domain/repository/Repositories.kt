@@ -20,6 +20,7 @@ interface StandRepository {
     fun observeRoutesForStand(standId: String): Flow<List<StandRoute>>
     fun observeSitsForStand(standId: String): Flow<List<StandSit>>
     suspend fun saveStand(stand: Stand)
+    suspend fun updateStand(stand: Stand) = saveStand(stand)
     suspend fun deleteStand(standId: String)
     suspend fun saveRoute(route: StandRoute)
     suspend fun recordSit(sit: StandSit)

@@ -7,9 +7,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -42,6 +45,7 @@ fun StandDetailSheet(
     entitlement: EntitlementState,
     onStartSit: () -> Unit,
     onEndSit: (windedDeer: Boolean) -> Unit,
+    onEditStand: (Stand) -> Unit = {},
     onDrawRoute: (Stand, RouteType) -> Unit,
     onProjectScent: (Stand) -> Unit,
     onDeleteStand: () -> Unit,
@@ -240,6 +244,17 @@ fun StandDetailSheet(
                             }
                         }
                     }
+                }
+            }
+
+            if (!detail.isReadOnlyLocked) {
+                OutlinedButton(
+                    onClick = { onEditStand(detail.stand) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Rounded.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Edit Stand")
                 }
             }
 

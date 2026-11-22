@@ -3,6 +3,7 @@ package com.buckcast.feature.map
 import android.graphics.RectF
 import android.os.SystemClock
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,15 +29,15 @@ import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.MyLocation
+import androidx.compose.material.icons.rounded.Navigation
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -61,6 +62,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
@@ -78,6 +80,7 @@ import com.buckcast.sensors.CompassPosture
 import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.gestures.RotateGestureDetector
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
@@ -123,6 +126,9 @@ fun MapScreen(
     onStandSelected: (standId: String) -> Unit,
     onRequestAddStand: (location: GeoPoint) -> Unit,
     onOpenPaywall: () -> Unit,
+    onOpenCompassCalibration: () -> Unit = {},
+    onRepositionLocationPicked: (GeoPoint) -> Unit = {},
+    onCancelReposition: () -> Unit = {},
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -131,6 +137,7 @@ fun MapScreen(
     val latestState by rememberUpdatedState(state)
     val latestOnStandSelected by rememberUpdatedState(onStandSelected)
     val latestOnRequestAddStand by rememberUpdatedState(onRequestAddStand)
+    val latestOnRepositionPicked by rememberUpdatedState(onRepositionLocationPicked)
 
     val mapView = remember {
         MapView(context).apply { onCreate(null) }
@@ -139,6 +146,7 @@ fun MapScreen(
     var styleReadyVersion by remember { mutableIntStateOf(0) }
     var centeredOnGpsOnce by remember { mutableStateOf(false) }
     var lastHandledJumpNonce by remember { mutableLongStateOf(state.camera.jumpNonce) }
+    var lastHandledSnapNorthNonce by remember { mutableLongStateOf(state.snapNorthNonce) }
 
     val offlinePackManager = remember(context) { OfflineMapPackManager.getInstance(context) }
     val packState by offlinePackManager.state.collectAsStateWithLifecycle()
@@ -201,6 +209,10 @@ fun MapScreen(
 
             map.addOnMapClickListener { latLng ->
                 val cur = latestState
+                if (cur.repositioningStandName != null) {
+                    latestOnRepositionPicked(GeoPoint(latLng.latitude, latLng.longitude))
+                    return@addOnMapClickListener true
+                }
                 if (cur.routeDrawing == null && !cur.scoutModeEnabled) {
                     val screenPt = map.projection.toScreenLocation(latLng)
                     val hitRadiusPx = 24f * context.resources.displayMetrics.density
@@ -230,6 +242,18 @@ fun MapScreen(
                 }
             }
 
+            map.addOnRotateListener(
+                object : MapLibreMap.OnRotateListener {
+                    override fun onRotateBegin(detector: RotateGestureDetector) {
+                        viewModel.onUserManualRotate()
+                    }
+
+                    override fun onRotate(detector: RotateGestureDetector) = Unit
+
+                    override fun onRotateEnd(detector: RotateGestureDetector) = Unit
+                },
+            )
+
             mapLibreMap = map
         }
     }
@@ -251,14 +275,45 @@ fun MapScreen(
         }
     }
 
-    val styleKey = Triple(state.baseLayer, state.showHillshade, state.mapTilerApiKey)
+    // Snap camera bearing smoothly back to True North (0°) when user toggles HEADING_UP -> NORTH_UP.
+    LaunchedEffect(mapLibreMap, state.snapNorthNonce) {
+        val map = mapLibreMap ?: return@LaunchedEffect
+        if (state.snapNorthNonce > lastHandledSnapNorthNonce) {
+            lastHandledSnapNorthNonce = state.snapNorthNonce
+            map.animateCamera(CameraUpdateFactory.bearingTo(0.0), 300)
+        }
+    }
+
+    // Drive live map bearing from CompassReading.trueHeadingDeg (~20 Hz throttled) in HEADING_UP mode.
+    LaunchedEffect(mapLibreMap, state.orientationMode) {
+        val map = mapLibreMap ?: return@LaunchedEffect
+        if (state.orientationMode != MapOrientationMode.HEADING_UP) return@LaunchedEffect
+        var lastBearingPushMs = 0L
+        snapshotFlow {
+            latestState.compassReading?.takeIf { it.isSensorAvailable }?.trueHeadingDeg
+        }.collect { targetHeading ->
+            val heading = targetHeading ?: return@collect
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastBearingPushMs >= 50L) {
+                val nextBearing = computeNextMapBearing(
+                    currentDeg = map.cameraPosition.bearing,
+                    targetDeg = heading,
+                )
+                if (nextBearing != null) {
+                    lastBearingPushMs = now
+                    map.moveCamera(CameraUpdateFactory.bearingTo(nextBearing))
+                }
+            }
+        }
+    }
+
+    val styleKey = state.baseLayer to state.showHillshade
     LaunchedEffect(mapLibreMap, styleKey) {
         val map = mapLibreMap ?: return@LaunchedEffect
-        val styleUri = MapTileConfig.styleFileUri(
-            context = context,
+        val styleUri = MapTileConfig.styleUrl(
             baseLayer = state.baseLayer,
             showHillshade = state.showHillshade,
-            mapTilerApiKey = state.mapTilerApiKey,
+            offlineSafe = false,
         )
         map.setStyle(Style.Builder().fromUri(styleUri)) { style ->
             ensureTacticalLayers(style)
@@ -472,8 +527,9 @@ fun MapScreen(
                 }
             }
 
-            if (state.compassReading?.accuracy == CompassAccuracy.CALIBRATION_NEEDED) {
+            if (state.compassReading?.accuracy?.needsCalibration == true) {
                 Surface(
+                    onClick = onOpenCompassCalibration,
                     color = MaterialTheme.colorScheme.errorContainer,
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
                     shape = MaterialTheme.shapes.small,
@@ -536,7 +592,40 @@ fun MapScreen(
                 ),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            state.statusMessage?.let { msg ->
+            state.repositioningStandName?.let { standName ->
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                    shape = MaterialTheme.shapes.medium,
+                    shadowElevation = 4.dp,
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "Tap new location on map to move '$standName'",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = {
+                            viewModel.cancelStandReposition()
+                            onCancelReposition()
+                        }) {
+                            Text("Cancel")
+                        }
+                    }
+                }
+            }
+
+            val visibleStatusMessage = state.statusMessage?.takeIf {
+                !(state.scoutResult != null && it.startsWith("Scout Mode active"))
+            }
+            visibleStatusMessage?.let { msg ->
                 Surface(
                     color = MaterialTheme.colorScheme.secondaryContainer,
                     border = hudBorder,
@@ -599,10 +688,11 @@ fun MapScreen(
             }
 
             state.routeDrawing?.let { drawing ->
-                ElevatedCard(
-                    colors = CardDefaults.elevatedCardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    ),
+                Surface(
+                    shape = MaterialTheme.shapes.medium,
+                    color = hudSurfaceColor,
+                    border = hudBorder,
+                    shadowElevation = 4.dp,
                 ) {
                     Column(
                         modifier = Modifier
@@ -646,6 +736,7 @@ fun MapScreen(
                 verticalAlignment = Alignment.Bottom,
             ) {
                 Surface(
+                    onClick = onOpenCompassCalibration,
                     modifier = Modifier.weight(1f, fill = false),
                     shape = MaterialTheme.shapes.medium,
                     color = hudSurfaceColor,
@@ -665,9 +756,15 @@ fun MapScreen(
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
                             )
-                            val postureLabel = when (state.compassReading?.posture) {
-                                CompassPosture.UPRIGHT_AIMING -> "Aiming"
-                                else -> "Flat"
+                            val reading = state.compassReading
+                            val postureLabel = if (reading?.posture == CompassPosture.UPRIGHT_AIMING) {
+                                val aimDeg = kotlin.math.round(reading.pitchDeg).toInt()
+                                "Aim · $aimDeg°"
+                            } else {
+                                val flatTiltDeg = reading?.let {
+                                    kotlin.math.round(90.0 + it.pitchDeg).toInt().coerceIn(0, 90)
+                                } ?: 0
+                                "Flat · $flatTiltDeg°"
                             }
                             Surface(
                                 color = MaterialTheme.colorScheme.primaryContainer,
@@ -714,8 +811,64 @@ fun MapScreen(
                     horizontalAlignment = Alignment.End,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    val isHeadingUp = state.orientationMode == MapOrientationMode.HEADING_UP
+                    val orientContainer = if (isHeadingUp) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f)
+                    }
+                    val orientContent = if (isHeadingUp) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    }
+                    val orientBorder = if (isHeadingUp) {
+                        BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+                    } else {
+                        hudBorder
+                    }
+                    val arrowRotation = if (isHeadingUp) {
+                        -(state.compassReading?.trueHeadingDeg ?: 0.0).toFloat()
+                    } else {
+                        0f
+                    }
+                    Surface(
+                        onClick = { viewModel.toggleOrientationMode() },
+                        shape = RoundedCornerShape(14.dp),
+                        color = orientContainer,
+                        contentColor = orientContent,
+                        border = orientBorder,
+                        shadowElevation = 4.dp,
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Navigation,
+                                contentDescription = if (isHeadingUp) "Heading Up (tap for North Up)" else "North Up (tap for Azimuth Up)",
+                                modifier = Modifier
+                                    .size(18.dp)
+                                    .graphicsLayer { rotationZ = arrowRotation },
+                            )
+                            Text(
+                                text = if (isHeadingUp) "AZM" else "N",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                softWrap = false,
+                            )
+                        }
+                    }
+
                     SmallFloatingActionButton(
                         onClick = { viewModel.recenterOnUserLocation() },
+                        modifier = Modifier.border(
+                            width = 1.dp,
+                            color = MaterialTheme.colorScheme.outline,
+                            shape = FloatingActionButtonDefaults.smallShape,
+                        ),
                         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                         contentColor = MaterialTheme.colorScheme.primary,
                     ) {
@@ -730,6 +883,11 @@ fun MapScreen(
                             )
                             onRequestAddStand(target)
                         },
+                        modifier = Modifier.border(
+                            width = 1.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant,
+                            shape = FloatingActionButtonDefaults.shape,
+                        ),
                         containerColor = MaterialTheme.colorScheme.primary,
                         contentColor = MaterialTheme.colorScheme.onPrimary,
                     ) {
@@ -759,6 +917,7 @@ fun MapScreen(
                     mapTilerApiKey = state.mapTilerApiKey,
                 )
             },
+            onCancelDownload = offlinePackManager::cancelDownload,
             onDeletePack = offlinePackManager::deletePack,
             onDismiss = { showOfflineSheet = false },
         )

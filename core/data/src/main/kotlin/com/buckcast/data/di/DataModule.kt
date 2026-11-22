@@ -63,7 +63,10 @@ object DataModule {
         BuckCastDatabase::class.java,
         "buckcast.db",
     )
-        .addMigrations(BuckCastDatabase.MIGRATION_1_2)
+        .addMigrations(
+            BuckCastDatabase.MIGRATION_1_2,
+            BuckCastDatabase.MIGRATION_2_3,
+        )
         .build()
 
     @Provides

@@ -7,6 +7,8 @@ import com.buckcast.domain.entitlement.SubscriptionTier
 import com.buckcast.domain.math.GeoPoint
 import com.buckcast.domain.model.CachedWeatherForecast
 import com.buckcast.domain.model.FieldLog
+import com.buckcast.domain.model.HourlyWeatherPoint
+import com.buckcast.domain.model.RouteType
 import com.buckcast.domain.model.Sighting
 import com.buckcast.domain.model.Stand
 import com.buckcast.domain.model.StandRoute
@@ -23,6 +25,7 @@ import com.buckcast.domain.repository.FieldDataRepository
 import com.buckcast.domain.repository.StandRepository
 import com.buckcast.domain.repository.WeatherRepository
 import com.buckcast.domain.stands.StandFreshnessLevel
+import com.buckcast.domain.wind.StandWindVerdict
 import com.buckcast.sensors.LocationPowerMode
 import com.buckcast.sensors.LocationProvider
 import com.buckcast.sensors.LocationState
@@ -187,6 +190,89 @@ class StandsViewModelTest {
             job.cancel()
         }
 
+    @Test
+    fun `updateStand preserves sit history, freshness, and entry routes while immediately recalculating wind verdict`() =
+        runTest(testDispatcher) {
+            val standRepo = FakeStandRepo()
+            val entitlementRepo = FakeEntitlementRepo(SubscriptionTier.ALPHA)
+            // Ambient wind is blowing FROM 315° (NW)
+            val vm = StandsViewModel(
+                standRepository = standRepo,
+                fieldDataRepository = FakeFieldRepo(),
+                weatherRepository = FakeWeatherRepo(windFromDeg = 315.0),
+                entitlementRepository = entitlementRepo,
+                locationProvider = fakeLocationProvider(),
+            )
+            val job = launch { vm.uiState.collect() }
+            advanceUntilIdle()
+
+            // Initial stand prefers S wind (bad for NW ambient wind)
+            assertTrue(
+                vm.saveStand(
+                    existingId = null,
+                    name = "South Bench",
+                    location = GeoPoint(41.58, -93.62),
+                    standType = StandType.LADDER_STAND,
+                    standHeightFeet = 16.0,
+                    terrainPosition = TerrainPosition.BENCH_TERRACE,
+                    selectedWindDirs = setOf(WindRoseDirection.S),
+                    slopeAspectDeg = 180.0,
+                    slopeGradePercent = 12.0,
+                    notes = "Initial notes",
+                ),
+            )
+            advanceUntilIdle()
+
+            val initial = vm.uiState.value.stands.first()
+            val standId = initial.stand.id
+            val createdMs = initial.stand.createdAtEpochMs
+            assertEquals(StandWindVerdict.UNSAFE, initial.windEvaluation.verdict)
+
+            // Log a winded sit -> BURNED freshness, and save an ENTRY route
+            assertTrue(vm.startSit(standId))
+            advanceUntilIdle()
+            vm.endSit(standId, windedDeer = true)
+            assertTrue(
+                vm.saveStandRoute(
+                    standId = standId,
+                    routeType = RouteType.ENTRY,
+                    points = listOf(GeoPoint(41.579, -93.621), GeoPoint(41.58, -93.62)),
+                ),
+            )
+            advanceUntilIdle()
+            assertEquals(StandFreshnessLevel.BURNED, vm.uiState.value.stands.first().freshness.level)
+            assertEquals(1, vm.uiState.value.stands.first().routes.size)
+
+            // Edit stand: rename, reposition pin, switch preferred wind to NW (optimal for 315° NW wind)
+            assertTrue(
+                vm.updateStand(
+                    standId = standId,
+                    name = "NW Ridge Oak",
+                    location = GeoPoint(41.5825, -93.6245),
+                    standType = StandType.HANG_ON,
+                    standHeightFeet = 21.0,
+                    terrainPosition = TerrainPosition.UPPER_THIRD,
+                    selectedWindDirs = setOf(WindRoseDirection.NW),
+                    slopeAspectDeg = 135.0,
+                    slopeGradePercent = 18.0,
+                    notes = "Moved 250 yd NW",
+                ),
+            )
+            advanceUntilIdle()
+
+            val updated = vm.uiState.value.stands.first()
+            assertEquals(standId, updated.stand.id)
+            assertEquals(createdMs, updated.stand.createdAtEpochMs)
+            assertEquals("NW Ridge Oak", updated.stand.name)
+            assertEquals(41.5825, updated.stand.location.latitude, 1e-6)
+            assertEquals(-93.6245, updated.stand.location.longitude, 1e-6)
+            assertEquals(StandFreshnessLevel.BURNED, updated.freshness.level)
+            assertEquals(1, updated.routes.size)
+            assertEquals(StandWindVerdict.OPTIMAL, updated.windEvaluation.verdict)
+
+            job.cancel()
+        }
+
     private fun fakeLocationProvider(): LocationProvider = object : LocationProvider(
         java.lang.reflect.Proxy.newProxyInstance(
             FusedLocationProviderClient::class.java.classLoader,
@@ -208,8 +294,11 @@ class StandsViewModelTest {
         override fun observeSitsForStand(standId: String): Flow<List<StandSit>> =
             sits.map { list -> list.filter { it.standId == standId } }
         override suspend fun saveStand(stand: Stand) {
-            val stamped = if (stand.createdAtEpochMs <= 0L) stand.copy(createdAtEpochMs = seq++) else stand.copy(createdAtEpochMs = seq++)
+            val stamped = if (stand.createdAtEpochMs <= 0L) stand.copy(createdAtEpochMs = seq++) else stand
             stands.value = stands.value.filterNot { it.id == stamped.id } + stamped
+        }
+        override suspend fun updateStand(stand: Stand) {
+            stands.value = stands.value.filterNot { it.id == stand.id } + stand
         }
         override suspend fun deleteStand(standId: String) {
             stands.value = stands.value.filterNot { it.id == standId }
@@ -243,9 +332,39 @@ class StandsViewModelTest {
         override suspend fun saveWeaponProfile(profile: WeaponProfile) = Unit
     }
 
-    private class FakeWeatherRepo : WeatherRepository {
-        override fun observeForecast(latitude: Double, longitude: Double): Flow<CachedWeatherForecast?> = flowOf(null)
-        override fun observeLatestCachedForecast(): Flow<CachedWeatherForecast?> = flowOf(null)
+    private class FakeWeatherRepo(
+        private val windFromDeg: Double? = null,
+    ) : WeatherRepository {
+        private val cached: CachedWeatherForecast? = windFromDeg?.let { wf ->
+            CachedWeatherForecast(
+                gridKey = "41.60,-93.60",
+                latitude = 41.58,
+                longitude = -93.62,
+                elevationFeet = 950.0,
+                timezoneId = "America/Chicago",
+                fetchedAtEpochMs = System.currentTimeMillis(),
+                isStale = false,
+                hourly = listOf(
+                    HourlyWeatherPoint(
+                        epochSeconds = System.currentTimeMillis() / 1000L,
+                        isoLocalTime = "2026-11-11T07:00",
+                        tempDegF = 35.0,
+                        apparentTempDegF = 29.0,
+                        barometricPressureInHg = 30.20,
+                        pressureTrend3hInHg = 0.04,
+                        windSpeedMph = 9.0,
+                        windGustMph = 14.0,
+                        windFromDeg = wf,
+                        precipInchesPerHr = 0.0,
+                        cloudCoverPercent = 10.0,
+                        weatherCode = 0,
+                    ),
+                ),
+                daily = emptyList(),
+            )
+        }
+        override fun observeForecast(latitude: Double, longitude: Double): Flow<CachedWeatherForecast?> = flowOf(cached)
+        override fun observeLatestCachedForecast(): Flow<CachedWeatherForecast?> = flowOf(cached)
         override suspend fun refreshForecast(latitude: Double, longitude: Double): Result<CachedWeatherForecast> =
             Result.failure(IllegalStateException("unused"))
     }

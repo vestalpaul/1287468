@@ -191,18 +191,27 @@ class StandsViewModel @Inject constructor(
         slopeGradePercent: Double?,
         notes: String,
     ): Boolean {
-        val state = uiState.value
-        val isNew = existingId == null
-        if (isNew && !state.canCreateAnotherStand) {
-            return false
+        if (existingId != null) {
+            return updateStand(
+                standId = existingId,
+                name = name,
+                location = location,
+                standType = standType,
+                standHeightFeet = standHeightFeet,
+                terrainPosition = terrainPosition,
+                selectedWindDirs = selectedWindDirs,
+                slopeAspectDeg = slopeAspectDeg,
+                slopeGradePercent = slopeGradePercent,
+                notes = notes,
+            )
         }
-        val existingBundle = existingId?.let { id -> state.stands.firstOrNull { it.stand.id == id } }
-        if (existingBundle?.isReadOnlyLocked == true) {
+        val state = uiState.value
+        if (!state.canCreateAnotherStand) {
             return false
         }
 
         val stand = Stand(
-            id = existingId ?: UUID.randomUUID().toString(),
+            id = UUID.randomUUID().toString(),
             name = name.trim().ifBlank { "Stand ${state.stands.size + 1}" },
             location = location,
             standType = standType,
@@ -213,11 +222,57 @@ class StandsViewModel @Inject constructor(
             slopeAspectDeg = slopeAspectDeg?.let(AngleMath::normalizeDegrees),
             slopeGradePercent = slopeGradePercent?.coerceIn(0.0, 100.0),
             notes = notes.trim(),
-            createdAtEpochMs = existingBundle?.stand?.createdAtEpochMs ?: System.currentTimeMillis(),
+            createdAtEpochMs = System.currentTimeMillis(),
         )
         viewModelScope.launch {
             standRepository.saveStand(stand)
             messageFlow.value = "Saved stand '${stand.name}'"
+        }
+        return true
+    }
+
+    /**
+     * Updates an existing [Stand] in Room without deleting or resetting its sit history,
+     * [StandFreshnessCalculator] score, or entry/exit [StandRoute] paths.
+     */
+    fun updateStand(
+        standId: String,
+        name: String,
+        location: GeoPoint,
+        standType: StandType,
+        standHeightFeet: Double,
+        terrainPosition: TerrainPosition,
+        selectedWindDirs: Set<WindRoseDirection>,
+        slopeAspectDeg: Double?,
+        slopeGradePercent: Double?,
+        notes: String,
+    ): Boolean {
+        val state = uiState.value
+        val existingBundle = state.stands.firstOrNull { it.stand.id == standId } ?: return false
+        if (existingBundle.isReadOnlyLocked) {
+            return false
+        }
+
+        val existing = existingBundle.stand
+        val resolvedElevation = location.elevationFeet ?: existing.elevationFeet
+        val resolvedLocation = location.copy(elevationFeet = resolvedElevation)
+        val updated = Stand(
+            id = existing.id,
+            name = name.trim().ifBlank { existing.name },
+            location = resolvedLocation,
+            standType = standType,
+            standHeightFeet = standHeightFeet.coerceIn(0.0, 60.0),
+            terrainPosition = terrainPosition,
+            preferredWindSectors = selectedWindDirs.map { it.toSector() },
+            elevationFeet = resolvedElevation,
+            slopeAspectDeg = slopeAspectDeg?.let(AngleMath::normalizeDegrees),
+            slopeGradePercent = slopeGradePercent?.coerceIn(0.0, 100.0),
+            notes = notes.trim(),
+            createdAtEpochMs = existing.createdAtEpochMs,
+        )
+        viewModelScope.launch {
+            standRepository.updateStand(updated)
+            messageFlow.value = "Updated stand '${updated.name}'"
         }
         return true
     }

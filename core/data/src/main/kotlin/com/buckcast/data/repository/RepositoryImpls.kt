@@ -52,6 +52,10 @@ internal class StandRepositoryImpl(
         standDao.upsertStand(mappers.toEntity(stand))
     }
 
+    override suspend fun updateStand(stand: Stand) {
+        standDao.updateStand(mappers.toEntity(stand))
+    }
+
     override suspend fun deleteStand(standId: String) {
         standDao.deleteStandById(standId)
     }

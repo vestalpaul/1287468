@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.WorkspacePremium
@@ -67,6 +68,7 @@ fun SettingsScreen(
     viewModel: SettingsViewModel,
     contentPadding: PaddingValues,
     onOpenPaywall: () -> Unit,
+    onOpenCompassCalibration: () -> Unit = {},
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val clipboard = LocalClipboardManager.current
@@ -165,8 +167,10 @@ fun SettingsScreen(
                     peakRutMonthDay = state.settings.peakRutMonthDay,
                     beforeSunriseMin = state.settings.legalLightBeforeSunriseMinutes,
                     afterSunsetMin = state.settings.legalLightAfterSunsetMinutes,
+                    compassOffsetDeg = state.settings.compassOffsetDeg,
                     onSelectPeakRut = viewModel::updatePeakRutDate,
                     onSelectLegalOffsets = viewModel::updateLegalLightOffsets,
+                    onOpenCompassCalibration = onOpenCompassCalibration,
                 )
             }
 
@@ -375,8 +379,10 @@ private fun CalibrationCard(
     peakRutMonthDay: String,
     beforeSunriseMin: Long,
     afterSunsetMin: Long,
+    compassOffsetDeg: Double,
     onSelectPeakRut: (Int, Int) -> Unit,
     onSelectLegalOffsets: (Long, Long) -> Unit,
+    onOpenCompassCalibration: () -> Unit,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -419,6 +425,22 @@ private fun CalibrationCard(
                         label = { Text(label) },
                     )
                 }
+            }
+
+            Spacer(Modifier.height(4.dp))
+            Text("True-North Compass Calibration", style = MaterialTheme.typography.labelLarge)
+            OutlinedButton(
+                onClick = onOpenCompassCalibration,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Rounded.Explore, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                val trimTag = if (compassOffsetDeg != 0.0) {
+                    String.format(java.util.Locale.US, " (Trim %+.1f°)", compassOffsetDeg)
+                } else {
+                    ""
+                }
+                Text("Calibrate Compass$trimTag")
             }
         }
     }

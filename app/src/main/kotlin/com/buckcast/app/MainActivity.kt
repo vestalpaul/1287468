@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.buckcast.app.ui.CompassCalibrationSheet
 import com.buckcast.app.ui.DropTineTheme
 import com.buckcast.domain.math.GeoPoint
 import com.buckcast.feature.forecast.ForecastScreen
@@ -65,6 +66,7 @@ import com.buckcast.feature.settings.AlphaPaywallSheet
 import com.buckcast.feature.settings.SettingsScreen
 import com.buckcast.feature.settings.SettingsViewModel
 import com.buckcast.feature.stands.StandDetailSheet
+import com.buckcast.feature.stands.StandEditorDraft
 import com.buckcast.feature.stands.StandEditorSheet
 import com.buckcast.feature.stands.StandsViewModel
 import dagger.hilt.android.AndroidEntryPoint
@@ -103,9 +105,10 @@ private fun DropTineAppShell() {
 
     var selectedTab by rememberSaveable { mutableStateOf(DropTineTab.HOME) }
     var showPaywall by rememberSaveable { mutableStateOf(false) }
+    var showCompassCalibration by rememberSaveable { mutableStateOf(false) }
     var selectedStandId by rememberSaveable { mutableStateOf<String?>(null) }
-    var pendingStandLat by rememberSaveable { mutableStateOf<Double?>(null) }
-    var pendingStandLon by rememberSaveable { mutableStateOf<Double?>(null) }
+    var activeEditorDraft by remember { mutableStateOf<StandEditorDraft?>(null) }
+    var pendingRepositionDraft by remember { mutableStateOf<StandEditorDraft?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
@@ -168,58 +171,95 @@ private fun DropTineAppShell() {
                             if (!standsState.canCreateAnotherStand) {
                                 showPaywall = true
                             } else {
-                                pendingStandLat = point.latitude
-                                pendingStandLon = point.longitude
+                                activeEditorDraft = StandEditorDraft.forNewLocation(point)
                             }
                         },
                         onOpenPaywall = { showPaywall = true },
+                        onOpenCompassCalibration = { showCompassCalibration = true },
+                        onRepositionLocationPicked = { newPoint ->
+                            mapViewModel.cancelStandReposition()
+                            val pending = pendingRepositionDraft
+                            if (pending != null) {
+                                pendingRepositionDraft = null
+                                activeEditorDraft = pending.copy(location = newPoint)
+                            }
+                        },
+                        onCancelReposition = {
+                            val pending = pendingRepositionDraft
+                            if (pending != null) {
+                                pendingRepositionDraft = null
+                                activeEditorDraft = pending
+                            }
+                        },
                     )
                     DropTineTab.TRACK -> TrackPlaceholderScreen(contentPadding = innerPadding)
                     DropTineTab.SETTINGS -> SettingsScreen(
                         viewModel = settingsViewModel,
                         contentPadding = innerPadding,
                         onOpenPaywall = { showPaywall = true },
+                        onOpenCompassCalibration = { showCompassCalibration = true },
                     )
                 }
             }
         }
 
-        val pendingLat = pendingStandLat
-        val pendingLon = pendingStandLon
-        if (pendingLat != null && pendingLon != null) {
+        activeEditorDraft?.let { editorDraft ->
             StandEditorSheet(
-                initialLocation = GeoPoint(pendingLat, pendingLon),
-                existingStand = null,
+                initialLocation = editorDraft.location,
+                existingStand = editorDraft.existingStand,
+                draft = editorDraft,
                 isAlpha = settingsState.entitlement.isAlpha,
                 onSave = { name, location, standType, heightFeet, terrainPos, windDirs, aspect, grade, notes ->
-                    val saved = standsViewModel.saveStand(
-                        existingId = null,
-                        name = name,
-                        location = location,
-                        standType = standType,
-                        standHeightFeet = heightFeet,
-                        terrainPosition = terrainPos,
-                        selectedWindDirs = windDirs,
-                        slopeAspectDeg = aspect,
-                        slopeGradePercent = grade,
-                        notes = notes,
-                    )
-                    pendingStandLat = null
-                    pendingStandLon = null
+                    val targetExisting = editorDraft.existingStand
+                    val saved = if (targetExisting != null) {
+                        standsViewModel.updateStand(
+                            standId = targetExisting.id,
+                            name = name,
+                            location = location,
+                            standType = standType,
+                            standHeightFeet = heightFeet,
+                            terrainPosition = terrainPos,
+                            selectedWindDirs = windDirs,
+                            slopeAspectDeg = aspect,
+                            slopeGradePercent = grade,
+                            notes = notes,
+                        )
+                    } else {
+                        standsViewModel.saveStand(
+                            existingId = null,
+                            name = name,
+                            location = location,
+                            standType = standType,
+                            standHeightFeet = heightFeet,
+                            terrainPosition = terrainPos,
+                            selectedWindDirs = windDirs,
+                            slopeAspectDeg = aspect,
+                            slopeGradePercent = grade,
+                            notes = notes,
+                        )
+                    }
+                    activeEditorDraft = null
                     if (!saved) {
                         showPaywall = true
                     } else {
-                        val displayName = name.trim().ifBlank { "Stand" }
+                        val displayName = name.trim().ifBlank { targetExisting?.name ?: "Stand" }
+                        val verb = if (targetExisting != null) "updated" else "saved"
                         coroutineScope.launch {
-                            snackbarHostState.showSnackbar("Stand '$displayName' saved")
+                            snackbarHostState.showSnackbar("Stand '$displayName' $verb")
                         }
                     }
                 },
-                onOpenPaywall = { showPaywall = true },
-                onDismiss = {
-                    pendingStandLat = null
-                    pendingStandLon = null
+                onRequestReposition = { draftInProgress ->
+                    activeEditorDraft = null
+                    pendingRepositionDraft = draftInProgress
+                    val label = draftInProgress.name.trim().ifBlank {
+                        draftInProgress.existingStand?.name ?: "Stand"
+                    }
+                    mapViewModel.startStandReposition(label)
+                    selectedTab = DropTineTab.MAP
                 },
+                onOpenPaywall = { showPaywall = true },
+                onDismiss = { activeEditorDraft = null },
             )
         }
 
@@ -237,6 +277,10 @@ private fun DropTineAppShell() {
                 },
                 onEndSit = { winded ->
                     standsViewModel.endSit(activeDetail.stand.id, windedDeer = winded)
+                },
+                onEditStand = { stand ->
+                    selectedStandId = null
+                    activeEditorDraft = StandEditorDraft.fromStand(stand)
                 },
                 onDrawRoute = { stand, routeType ->
                     selectedStandId = null
@@ -272,6 +316,17 @@ private fun DropTineAppShell() {
                 onPurchaseAnnual = { settingsViewModel.purchaseAlpha(isAnnual = true) },
                 onRestorePurchases = settingsViewModel::restorePurchases,
                 onDismiss = { showPaywall = false },
+            )
+        }
+
+        if (showCompassCalibration) {
+            val liveCompass by settingsViewModel.liveCompassReading.collectAsStateWithLifecycle(initialValue = null)
+            CompassCalibrationSheet(
+                reading = liveCompass,
+                compassOffsetDeg = settingsState.settings.compassOffsetDeg,
+                onUpdateOffsetDeg = settingsViewModel::updateCompassOffsetDeg,
+                onRecalibrate = settingsViewModel::recalibrateCompass,
+                onDismiss = { showCompassCalibration = false },
             )
         }
     }

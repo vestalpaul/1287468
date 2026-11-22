@@ -229,6 +229,7 @@ data class AppSettings(
     val legalLightAfterSunsetMinutes: Long = 30L,
     val stealthModeEnabled: Boolean = false,
     val themePreset: AppThemePreset = AppThemePreset.TIMBERLINE_DARK,
+    val compassOffsetDeg: Double = 0.0,
     val customScorerWeights: Map<String, Double>? = null,
     val updatedAtEpochMs: Long = 0L,
 )

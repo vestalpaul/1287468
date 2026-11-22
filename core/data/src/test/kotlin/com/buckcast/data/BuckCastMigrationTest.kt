@@ -39,12 +39,12 @@ class BuckCastMigrationTest {
     }
 
     @Test
-    fun `migration 1 to 2 preserves stands and settings, defaults themePreset, and initializes entitlement_cache`() =
+    fun `migration 1 to 3 preserves stands and settings, defaults themePreset and compassOffsetDeg, and initializes entitlement_cache`() =
         runTest {
             createV1DatabaseAndSeedData()
 
             val migratedDb = Room.databaseBuilder(context, BuckCastDatabase::class.java, dbName)
-                .addMigrations(BuckCastDatabase.MIGRATION_1_2)
+                .addMigrations(BuckCastDatabase.MIGRATION_1_2, BuckCastDatabase.MIGRATION_2_3)
                 .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
                 .allowMainThreadQueries()
                 .build()
@@ -58,6 +58,7 @@ class BuckCastMigrationTest {
                 assertNotNull(settings)
                 assertEquals("TIMBERLINE_DARK", settings!!.themePreset)
                 assertEquals("11-11", settings.peakRutMonthDay)
+                assertEquals(0.0, settings.compassOffsetDeg, 1e-6)
 
                 migratedDb.entitlementCacheDao().upsert(
                     EntitlementCacheEntity(
@@ -68,6 +69,39 @@ class BuckCastMigrationTest {
                 )
                 val cache = migratedDb.entitlementCacheDao().getCacheOnce()
                 assertEquals("dt_migrated_01", cache?.supportUserId)
+            } finally {
+                migratedDb.close()
+            }
+        }
+
+    @Test
+    fun `migration 2 to 3 preserves existing stands, settings, and entitlement_cache while defaulting compassOffsetDeg to 0_0`() =
+        runTest {
+            createV2DatabaseAndSeedData()
+
+            val migratedDb = Room.databaseBuilder(context, BuckCastDatabase::class.java, dbName)
+                .addMigrations(BuckCastDatabase.MIGRATION_2_3)
+                .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
+                .allowMainThreadQueries()
+                .build()
+
+            try {
+                val stands = migratedDb.standDao().observeStands().first()
+                assertEquals(1, stands.size)
+                assertEquals("v2 Timber Stand", stands.first().name)
+
+                val settings = migratedDb.appSettingsDao().getSettingsOnce()
+                assertNotNull(settings)
+                assertEquals("BLAZE_SLATE", settings!!.themePreset)
+                assertEquals(0.0, settings.compassOffsetDeg, 1e-6)
+
+                // Verify writing non-zero compassOffsetDeg works post-migration
+                migratedDb.appSettingsDao().upsert(settings.copy(compassOffsetDeg = 4.5))
+                val updated = migratedDb.appSettingsDao().getSettingsOnce()
+                assertEquals(4.5, updated!!.compassOffsetDeg, 1e-6)
+
+                val cache = migratedDb.entitlementCacheDao().getCacheOnce()
+                assertEquals("dt_v2_user", cache?.supportUserId)
             } finally {
                 migratedDb.close()
             }
@@ -105,6 +139,61 @@ class BuckCastMigrationTest {
                     """
                     INSERT INTO app_settings (id, lastKnownLat, lastKnownLon, peakRutMonthDay, legalLightBeforeSunriseMinutes, legalLightAfterSunsetMinutes, stealthModeEnabled, customScorerWeightsJson, updatedAtEpochMs)
                     VALUES (1, 41.58, -93.62, '11-11', 30, 30, 0, NULL, 1795000000000)
+                    """.trimIndent(),
+                )
+            }
+
+            override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+        }
+        context.getDatabasePath(dbName).parentFile?.mkdirs()
+        val config = SupportSQLiteOpenHelper.Configuration.builder(context)
+            .name(dbName)
+            .callback(callback)
+            .build()
+        val helper = FrameworkSQLiteOpenHelperFactory().create(config)
+        helper.writableDatabase.close()
+        helper.close()
+    }
+
+    private fun createV2DatabaseAndSeedData() {
+        val callback = object : SupportSQLiteOpenHelper.Callback(2) {
+            override fun onCreate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `stands` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `latitude` REAL NOT NULL, `longitude` REAL NOT NULL, `elevationFeet` REAL, `slopeAspectDeg` REAL, `slopeGradePercent` REAL, `standType` TEXT NOT NULL, `standHeightFeet` REAL NOT NULL, `terrainPosition` TEXT NOT NULL, `preferredWindSectorsJson` TEXT NOT NULL, `notes` TEXT NOT NULL, `createdAtEpochMs` INTEGER NOT NULL, PRIMARY KEY(`id`))")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `stand_routes` (`id` TEXT NOT NULL, `standId` TEXT NOT NULL, `routeType` TEXT NOT NULL, `polylineJson` TEXT NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`standId`) REFERENCES `stands`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_stand_routes_standId` ON `stand_routes` (`standId`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `stand_sits` (`id` TEXT NOT NULL, `standId` TEXT NOT NULL, `startTimeEpochMs` INTEGER NOT NULL, `endTimeEpochMs` INTEGER NOT NULL, `windedDeer` INTEGER NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`standId`) REFERENCES `stands`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_stand_sits_standId` ON `stand_sits` (`standId`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `waypoints` (`id` TEXT NOT NULL, `category` TEXT NOT NULL, `name` TEXT NOT NULL, `latitude` REAL NOT NULL, `longitude` REAL NOT NULL, `elevationFeet` REAL, `notes` TEXT NOT NULL, `createdAtEpochMs` INTEGER NOT NULL, PRIMARY KEY(`id`))")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `track_sessions` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `trackType` TEXT NOT NULL, `startedAtEpochMs` INTEGER NOT NULL, `endedAtEpochMs` INTEGER, `notes` TEXT NOT NULL, PRIMARY KEY(`id`))")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `track_points` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `sessionId` TEXT NOT NULL, `latitude` REAL NOT NULL, `longitude` REAL NOT NULL, `elevationFeet` REAL, `recordedAtEpochMs` INTEGER NOT NULL, FOREIGN KEY(`sessionId`) REFERENCES `track_sessions`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_points_sessionId` ON `track_points` (`sessionId`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `field_logs` (`id` TEXT NOT NULL, `standId` TEXT, `notes` TEXT NOT NULL, `photoUrisJson` TEXT NOT NULL, `latitude` REAL NOT NULL, `longitude` REAL NOT NULL, `elevationFeet` REAL, `weatherSnapshotJson` TEXT, `rutPhaseNumber` INTEGER, `createdAtEpochMs` INTEGER NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`standId`) REFERENCES `stands`(`id`) ON UPDATE NO ACTION ON DELETE SET NULL )")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_field_logs_standId` ON `field_logs` (`standId`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `sightings` (`id` TEXT NOT NULL, `standId` TEXT, `deerClass` TEXT NOT NULL, `count` INTEGER NOT NULL, `travelBearingDeg` REAL, `distanceYards` REAL, `weatherSnapshotJson` TEXT, `observedAtEpochMs` INTEGER NOT NULL, `notes` TEXT NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`standId`) REFERENCES `stands`(`id`) ON UPDATE NO ACTION ON DELETE SET NULL )")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_sightings_standId` ON `sightings` (`standId`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `weather_cache` (`gridKey` TEXT NOT NULL, `latitude` REAL NOT NULL, `longitude` REAL NOT NULL, `elevationFeet` REAL NOT NULL, `timezoneId` TEXT NOT NULL, `fetchedAtEpochMs` INTEGER NOT NULL, `rawPayloadJson` TEXT NOT NULL, PRIMARY KEY(`gridKey`))")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `weapon_profiles` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `weaponType` TEXT NOT NULL, `zeroYards` REAL NOT NULL, `dropTableJson` TEXT NOT NULL, PRIMARY KEY(`id`))")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `app_settings` (`id` INTEGER NOT NULL, `lastKnownLat` REAL, `lastKnownLon` REAL, `peakRutMonthDay` TEXT NOT NULL, `legalLightBeforeSunriseMinutes` INTEGER NOT NULL, `legalLightAfterSunsetMinutes` INTEGER NOT NULL, `stealthModeEnabled` INTEGER NOT NULL, `themePreset` TEXT NOT NULL, `customScorerWeightsJson` TEXT, `updatedAtEpochMs` INTEGER NOT NULL, PRIMARY KEY(`id`))")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `entitlement_cache` (`id` INTEGER NOT NULL, `localFirstLaunchEpochMs` INTEGER NOT NULL, `serverFirstSeenEpochMs` INTEGER, `maxObservedEpochMs` INTEGER NOT NULL, `lastKnownTier` TEXT NOT NULL, `lastKnownSource` TEXT NOT NULL, `subscriptionExpiresEpochMs` INTEGER, `lastVerifiedEpochMs` INTEGER, `debugOverride` TEXT NOT NULL, `supportUserId` TEXT NOT NULL, PRIMARY KEY(`id`))")
+                db.execSQL("CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)")
+                db.execSQL("INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'cb37a7d9927fef03c34975bee801c145')")
+
+                db.execSQL(
+                    """
+                    INSERT INTO stands (id, name, latitude, longitude, elevationFeet, slopeAspectDeg, slopeGradePercent, standType, standHeightFeet, terrainPosition, preferredWindSectorsJson, notes, createdAtEpochMs)
+                    VALUES ('s-v2', 'v2 Timber Stand', 41.59, -93.63, 950.0, 180.0, 14.0, 'SADDLE', 19.0, 'BENCH_TERRACE', '[]', 'v2 seed', 1795000000000)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO app_settings (id, lastKnownLat, lastKnownLon, peakRutMonthDay, legalLightBeforeSunriseMinutes, legalLightAfterSunsetMinutes, stealthModeEnabled, themePreset, customScorerWeightsJson, updatedAtEpochMs)
+                    VALUES (1, 41.59, -93.63, '11-11', 30, 30, 0, 'BLAZE_SLATE', NULL, 1795000000000)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO entitlement_cache (id, localFirstLaunchEpochMs, serverFirstSeenEpochMs, maxObservedEpochMs, lastKnownTier, lastKnownSource, subscriptionExpiresEpochMs, lastVerifiedEpochMs, debugOverride, supportUserId)
+                    VALUES (1, 1795000000000, NULL, 1795000000000, 'SCOUT', 'NONE', NULL, NULL, 'AUTO', 'dt_v2_user')
                     """.trimIndent(),
                 )
             }

@@ -1,10 +1,15 @@
 package com.buckcast.feature.map
 
 import android.content.Context
-import android.net.Uri
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.offline.OfflineManager
 import org.maplibre.android.offline.OfflineRegion
@@ -115,9 +120,14 @@ class OfflineMapPackManager private constructor(
     private val stateFlow = MutableStateFlow(OfflinePackManagerState())
     val state: StateFlow<OfflinePackManagerState> = stateFlow.asStateFlow()
 
+    private val managerScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
     // Keep strong reference while active so GC never finalizes native OfflineRegion callbacks mid-download.
     @Volatile
     private var activeDownloadRegion: OfflineRegion? = null
+
+    @Volatile
+    private var stallWatchdogJob: Job? = null
 
     fun refreshPacks() {
         offlineManager.listOfflineRegions(
@@ -193,13 +203,24 @@ class OfflineMapPackManager private constructor(
         minZoom: Int = OfflineTileEstimator.DEFAULT_MIN_ZOOM,
         maxZoom: Int = OfflineTileEstimator.DEFAULT_MAX_ZOOM,
     ) {
+        if (stateFlow.value.isDownloading) {
+            return
+        }
+        val safeMinZoom = minZoom.coerceIn(
+            OfflineTileEstimator.DEFAULT_MIN_ZOOM,
+            OfflineTileEstimator.DEFAULT_MAX_ZOOM,
+        )
+        val safeMaxZoom = maxZoom.coerceIn(
+            safeMinZoom,
+            OfflineTileEstimator.DEFAULT_MAX_ZOOM,
+        )
         val estimatedTiles = OfflineTileEstimator.estimateTileCount(
             northLat = northLat,
             southLat = southLat,
             eastLon = eastLon,
             westLon = westLon,
-            minZoom = minZoom,
-            maxZoom = maxZoom,
+            minZoom = safeMinZoom,
+            maxZoom = safeMaxZoom,
         )
         if (estimatedTiles > OfflineTileEstimator.MAX_TILE_COUNT_GUARDRAIL) {
             stateFlow.value = stateFlow.value.copy(
@@ -210,13 +231,16 @@ class OfflineMapPackManager private constructor(
         }
 
         val cleanName = packName.trim().ifBlank { "Hunt Area" }
-        val styleFile = MapTileConfig.writeStyleFile(
-            context = appContext,
+        val styleFileKey = MapTileConfig.styleKey(
             baseLayer = baseLayer,
             showHillshade = showHillshade,
-            mapTilerApiKey = mapTilerApiKey,
+            offlineSafe = true,
         )
-        val styleUrl = Uri.fromFile(styleFile).toString()
+        val styleUrl = MapTileConfig.styleUrl(
+            baseLayer = baseLayer,
+            showHillshade = showHillshade,
+            offlineSafe = true,
+        )
 
         val bounds = LatLngBounds.from(
             max(northLat, southLat).coerceIn(-85.0, 85.0),
@@ -227,8 +251,8 @@ class OfflineMapPackManager private constructor(
         val definition = OfflineTilePyramidRegionDefinition(
             styleUrl,
             bounds,
-            minZoom.toDouble(),
-            maxZoom.toDouble(),
+            safeMinZoom.toDouble(),
+            safeMaxZoom.toDouble(),
             appContext.resources.displayMetrics.density.coerceAtLeast(1f),
         )
         val metadata = cleanName.toByteArray(StandardCharsets.UTF_8)
@@ -242,96 +266,176 @@ class OfflineMapPackManager private constructor(
             downloadedBytes = 0L,
             requiredResources = estimatedTiles,
             errorMessage = null,
-            statusMessage = "Starting download from ${styleFile.name} (~$estimatedTiles tiles)...",
+            statusMessage = "Starting download ($styleFileKey · ~$estimatedTiles tiles)...",
         )
+        resetStallWatchdog(cleanName)
 
-        offlineManager.createOfflineRegion(
-            definition,
-            metadata,
-            object : OfflineManager.CreateOfflineRegionCallback {
-                override fun onCreate(offlineRegion: OfflineRegion) {
-                    activeDownloadRegion = offlineRegion
-                    offlineRegion.setDeliverInactiveMessages(true)
-                    offlineRegion.setObserver(
-                        object : OfflineRegion.OfflineRegionObserver {
-                            override fun onStatusChanged(status: OfflineRegionStatus) {
-                                val required = max(status.requiredResourceCount, 1L)
-                                val fraction = (status.completedResourceCount.toFloat() / required.toFloat())
-                                    .coerceIn(0f, 1f)
-                                val mb = status.completedResourceSize / (1024.0 * 1024.0)
-                                val complete = status.isComplete
-                                stateFlow.value = stateFlow.value.copy(
-                                    isDownloading = !complete,
-                                    progressFraction = if (complete) 1f else fraction,
-                                    downloadedTiles = status.completedTileCount,
-                                    downloadedBytes = status.completedResourceSize,
-                                    requiredResources = status.requiredResourceCount,
-                                    statusMessage = if (complete) {
-                                        String.format(
-                                            Locale.US,
-                                            "Downloaded \"%s\" · %d tiles (%.1f MB)",
-                                            cleanName,
-                                            status.completedTileCount,
-                                            mb,
-                                        )
-                                    } else {
-                                        String.format(
-                                            Locale.US,
-                                            "Downloading \"%s\" · %d tiles (%.1f MB) · %d/%d res",
-                                            cleanName,
-                                            status.completedTileCount,
-                                            mb,
-                                            status.completedResourceCount,
-                                            status.requiredResourceCount,
-                                        )
-                                    },
-                                )
-                                if (complete) {
+        try {
+            offlineManager.createOfflineRegion(
+                definition,
+                metadata,
+                object : OfflineManager.CreateOfflineRegionCallback {
+                    override fun onCreate(offlineRegion: OfflineRegion) {
+                        if (!stateFlow.value.isDownloading) {
+                            offlineRegion.setDownloadState(OfflineRegion.STATE_INACTIVE)
+                            offlineRegion.setObserver(null)
+                            offlineRegion.delete(
+                                object : OfflineRegion.OfflineRegionDeleteCallback {
+                                    override fun onDelete() = Unit
+                                    override fun onError(error: String) = Unit
+                                },
+                            )
+                            return
+                        }
+                        activeDownloadRegion = offlineRegion
+                        var lastProgressCount = -1L
+                        offlineRegion.setDeliverInactiveMessages(true)
+                        offlineRegion.setObserver(
+                            object : OfflineRegion.OfflineRegionObserver {
+                                override fun onStatusChanged(status: OfflineRegionStatus) {
+                                    if (!stateFlow.value.isDownloading || activeDownloadRegion !== offlineRegion) {
+                                        return
+                                    }
+                                    val required = max(status.requiredResourceCount, 1L)
+                                    val fraction = (status.completedResourceCount.toFloat() / required.toFloat())
+                                        .coerceIn(0f, 1f)
+                                    val mb = status.completedResourceSize / (1024.0 * 1024.0)
+                                    val complete = status.isComplete
+                                    if (!complete && status.completedResourceCount > lastProgressCount) {
+                                        lastProgressCount = status.completedResourceCount
+                                        resetStallWatchdog(cleanName)
+                                    } else if (complete) {
+                                        stallWatchdogJob?.cancel()
+                                    }
+                                    stateFlow.value = stateFlow.value.copy(
+                                        isDownloading = !complete,
+                                        progressFraction = if (complete) 1f else fraction,
+                                        downloadedTiles = status.completedTileCount,
+                                        downloadedBytes = status.completedResourceSize,
+                                        requiredResources = status.requiredResourceCount,
+                                        statusMessage = if (complete) {
+                                            String.format(
+                                                Locale.US,
+                                                "Downloaded \"%s\" · %d tiles (%.1f MB)",
+                                                cleanName,
+                                                status.completedTileCount,
+                                                mb,
+                                            )
+                                        } else {
+                                            String.format(
+                                                Locale.US,
+                                                "Downloading \"%s\" · %d tiles (%.1f MB) · %d/%d res",
+                                                cleanName,
+                                                status.completedTileCount,
+                                                mb,
+                                                status.completedResourceCount,
+                                                status.requiredResourceCount,
+                                            )
+                                        },
+                                    )
+                                    if (complete) {
+                                        offlineRegion.setDownloadState(OfflineRegion.STATE_INACTIVE)
+                                        offlineRegion.setObserver(null)
+                                        activeDownloadRegion = null
+                                        refreshPacks()
+                                    }
+                                }
+
+                                override fun onError(error: OfflineRegionError) {
+                                    if (activeDownloadRegion !== offlineRegion) return
+                                    stallWatchdogJob?.cancel()
                                     offlineRegion.setDownloadState(OfflineRegion.STATE_INACTIVE)
                                     offlineRegion.setObserver(null)
                                     activeDownloadRegion = null
+                                    stateFlow.value = stateFlow.value.copy(
+                                        isDownloading = false,
+                                        errorMessage = "Tile download failed [${error.reason}]: ${error.message}",
+                                        statusMessage = null,
+                                    )
                                     refreshPacks()
                                 }
-                            }
 
-                            override fun onError(error: OfflineRegionError) {
-                                offlineRegion.setDownloadState(OfflineRegion.STATE_INACTIVE)
-                                offlineRegion.setObserver(null)
-                                activeDownloadRegion = null
-                                stateFlow.value = stateFlow.value.copy(
-                                    isDownloading = false,
-                                    errorMessage = "Tile download failed [${error.reason}]: ${error.message}",
-                                    statusMessage = null,
-                                )
-                                refreshPacks()
-                            }
+                                override fun mapboxTileCountLimitExceeded(limit: Long) {
+                                    if (activeDownloadRegion !== offlineRegion) return
+                                    stallWatchdogJob?.cancel()
+                                    offlineRegion.setDownloadState(OfflineRegion.STATE_INACTIVE)
+                                    offlineRegion.setObserver(null)
+                                    activeDownloadRegion = null
+                                    stateFlow.value = stateFlow.value.copy(
+                                        isDownloading = false,
+                                        errorMessage = "Tile guardrail exceeded ($limit tiles). Zoom in and retry.",
+                                        statusMessage = null,
+                                    )
+                                    refreshPacks()
+                                }
+                            },
+                        )
+                        offlineRegion.setDownloadState(OfflineRegion.STATE_ACTIVE)
+                    }
 
-                            override fun mapboxTileCountLimitExceeded(limit: Long) {
-                                offlineRegion.setDownloadState(OfflineRegion.STATE_INACTIVE)
-                                offlineRegion.setObserver(null)
-                                activeDownloadRegion = null
-                                stateFlow.value = stateFlow.value.copy(
-                                    isDownloading = false,
-                                    errorMessage = "Tile guardrail exceeded ($limit tiles). Zoom in and retry.",
-                                    statusMessage = null,
-                                )
-                                refreshPacks()
-                            }
-                        },
-                    )
-                    offlineRegion.setDownloadState(OfflineRegion.STATE_ACTIVE)
-                }
+                    override fun onError(error: String) {
+                        stallWatchdogJob?.cancel()
+                        activeDownloadRegion = null
+                        stateFlow.value = stateFlow.value.copy(
+                            isDownloading = false,
+                            errorMessage = error.ifBlank { "Unable to create offline region" },
+                            statusMessage = null,
+                        )
+                    }
+                },
+            )
+        } catch (t: Throwable) {
+            stallWatchdogJob?.cancel()
+            activeDownloadRegion = null
+            stateFlow.value = stateFlow.value.copy(
+                isDownloading = false,
+                errorMessage = t.message ?: "Unable to start offline tile download",
+                statusMessage = null,
+            )
+        }
+    }
 
-                override fun onError(error: String) {
-                    activeDownloadRegion = null
-                    stateFlow.value = stateFlow.value.copy(
-                        isDownloading = false,
-                        errorMessage = error.ifBlank { "Unable to create offline region" },
-                        statusMessage = null,
-                    )
-                }
-            },
+    fun cancelDownload() {
+        stallWatchdogJob?.cancel()
+        val active = activeDownloadRegion
+        activeDownloadRegion = null
+        active?.let { region ->
+            runCatching {
+                region.setDownloadState(OfflineRegion.STATE_INACTIVE)
+                region.setObserver(null)
+            }
+        }
+        stateFlow.value = stateFlow.value.copy(
+            isDownloading = false,
+            activeRegionName = null,
+            errorMessage = null,
+            statusMessage = "Download cancelled",
         )
+        refreshPacks()
+    }
+
+    private fun resetStallWatchdog(packName: String) {
+        stallWatchdogJob?.cancel()
+        stallWatchdogJob = managerScope.launch {
+            delay(DOWNLOAD_STALL_TIMEOUT_MS)
+            if (stateFlow.value.isDownloading) {
+                val active = activeDownloadRegion
+                activeDownloadRegion = null
+                active?.let { region ->
+                    runCatching {
+                        region.setDownloadState(OfflineRegion.STATE_INACTIVE)
+                        region.setObserver(null)
+                    }
+                }
+                stateFlow.value = stateFlow.value.copy(
+                    isDownloading = false,
+                    activeRegionName = null,
+                    errorMessage = "Download timed out for \"$packName\". Check signal and retry.",
+                    statusMessage = null,
+                )
+                refreshPacks()
+            }
+        }
     }
 
     fun deletePack(packId: Long) {
@@ -366,6 +470,8 @@ class OfflineMapPackManager private constructor(
     }
 
     companion object {
+        private const val DOWNLOAD_STALL_TIMEOUT_MS = 45_000L
+
         @Volatile
         private var instance: OfflineMapPackManager? = null
 

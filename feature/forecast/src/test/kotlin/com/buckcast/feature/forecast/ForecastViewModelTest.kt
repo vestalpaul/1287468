@@ -206,6 +206,7 @@ class ForecastViewModelTest {
             assertFalse(state.rankedStands.first().isLockedByScout)
 
             assertTrue(vm.openDayIntel(0))
+            advanceUntilIdle()
             assertEquals(0, vm.uiState.value.selectedIntelDayIndex)
 
             job.cancel()

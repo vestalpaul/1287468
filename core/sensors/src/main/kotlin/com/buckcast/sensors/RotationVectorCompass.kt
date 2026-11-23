@@ -102,6 +102,7 @@ open class RotationVectorCompass(
         val remappedMatrix = FloatArray(9)
 
         var currentPosture = CompassPosture.FLAT_MAP
+        var lastMagneticAzimuthDeg: Double? = null
         var smoothedTrueHeading: Double? = null
         var currentAccuracy = CompassAccuracy.MEDIUM
 
@@ -115,17 +116,20 @@ open class RotationVectorCompass(
                     ?: Surface.ROTATION_0
                 val (axisX, axisY) = CompassFusionMath.displayAxisRemapFor(displayRotation)
                 SensorManager.remapCoordinateSystem(rawMatrix, axisX, axisY, remappedMatrix)
+                if (remappedMatrix.any { !it.isFinite() }) return
 
-                val pitchDeg = CompassFusionMath.extractAimPitchDeg(remappedMatrix)
                 currentPosture = CompassFusionMath.resolvePostureFromSkywardZ(
                     r7 = remappedMatrix[7].toDouble(),
                     previousPosture = currentPosture,
                     r8 = remappedMatrix[8].toDouble(),
                 )
+                val pitchDeg = CompassFusionMath.extractPitchDeg(remappedMatrix, currentPosture)
                 val magneticAzimuthDeg = CompassFusionMath.extractMagneticAzimuthFromMatrix(
                     remappedMatrix = remappedMatrix,
                     posture = currentPosture,
+                    previousAzimuthDeg = lastMagneticAzimuthDeg,
                 )
+                lastMagneticAzimuthDeg = magneticAzimuthDeg
 
                 val nowMs = System.currentTimeMillis()
                 val declinationDeg = declinationCache.getDeclinationDegrees(

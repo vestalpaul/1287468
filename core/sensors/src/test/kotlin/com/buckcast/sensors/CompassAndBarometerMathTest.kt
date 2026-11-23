@@ -23,93 +23,180 @@ import kotlin.math.sin
 class CompassAndBarometerMathTest {
 
     @Test
-    fun `treestand aim posture switches at -45 deg with cos(37) hysteresis and nose-down r7 less or eq 0_20 never flips upright`() {
+    fun `unified 3-state posture transitions enforce hysteresis across FLAT_MAP, UPRIGHT_AIMING, and AIM_DOWN`() {
         var posture = CompassPosture.FLAT_MAP
 
-        // Steep aim down -50 deg (skywardPitch = 40 deg -> r8 = cos(40)=0.766 > cos(45)) stays FLAT_MAP
+        // Casual flat palm tilt +15° (r7=sin(15)=0.259, r8=cos(15)=0.966 > 0.866) stays FLAT_MAP
         posture = CompassFusionMath.resolvePostureFromSkywardZ(
-            r7 = sin(Math.toRadians(40.0)),
+            r7 = sin(Math.toRadians(15.0)),
             previousPosture = posture,
-            r8 = cos(Math.toRadians(40.0)),
+            r8 = cos(Math.toRadians(15.0)),
         )
         assertEquals(CompassPosture.FLAT_MAP, posture)
 
-        // Nose-down / upside-down (r7 <= 0.20) stays FLAT_MAP even if r8 < 0.707
+        // Back-camera steep stand aim -59° (skyward=31° -> r7=sin(31)=0.515 > 0.25, r8=cos(31)=0.857 < 0.866) enters UPRIGHT_AIMING
         posture = CompassFusionMath.resolvePostureFromSkywardZ(
-            r7 = -0.5,
+            r7 = sin(Math.toRadians(31.0)),
             previousPosture = posture,
-            r8 = 0.5,
+            r8 = cos(Math.toRadians(31.0)),
+        )
+        assertEquals(CompassPosture.UPRIGHT_AIMING, posture)
+
+        // Inside UPRIGHT_AIMING exit hysteresis band (skyward=25° -> r8=cos(25)=0.906 <= 0.927, r7=0.423 >= 0.15) holds UPRIGHT_AIMING
+        posture = CompassFusionMath.resolvePostureFromSkywardZ(
+            r7 = sin(Math.toRadians(25.0)),
+            previousPosture = posture,
+            r8 = cos(Math.toRadians(25.0)),
+        )
+        assertEquals(CompassPosture.UPRIGHT_AIMING, posture)
+
+        // Flattened back to skyward=18° (r8=cos(18)=0.951 > 0.927) returns to FLAT_MAP
+        posture = CompassFusionMath.resolvePostureFromSkywardZ(
+            r7 = sin(Math.toRadians(18.0)),
+            previousPosture = posture,
+            r8 = cos(Math.toRadians(18.0)),
         )
         assertEquals(CompassPosture.FLAT_MAP, posture)
 
-        // Treestand aim -44 deg (skywardPitch = 46 deg -> r8 = cos(46) < 0.707, r7 = sin(46)=0.719 > 0.20) enters UPRIGHT_AIMING
+        // Nose-down -26° (r7 = sin(-26) = -0.438 < -0.423) enters AIM_DOWN
         posture = CompassFusionMath.resolvePostureFromSkywardZ(
-            r7 = sin(Math.toRadians(46.0)),
+            r7 = sin(Math.toRadians(-26.0)),
             previousPosture = posture,
-            r8 = cos(Math.toRadians(46.0)),
+            r8 = cos(Math.toRadians(-26.0)),
         )
-        assertEquals(CompassPosture.UPRIGHT_AIMING, posture)
+        assertEquals(CompassPosture.AIM_DOWN, posture)
 
-        // -50 deg inside hysteresis band (r8 = cos(40)=0.766 <= cos(37)=0.799) holds UPRIGHT_AIMING
+        // Inside AIM_DOWN exit hysteresis band (-20° -> r7 = -0.342 <= -0.309) holds AIM_DOWN
         posture = CompassFusionMath.resolvePostureFromSkywardZ(
-            r7 = sin(Math.toRadians(40.0)),
+            r7 = sin(Math.toRadians(-20.0)),
             previousPosture = posture,
-            r8 = cos(Math.toRadians(40.0)),
+            r8 = cos(Math.toRadians(-20.0)),
         )
-        assertEquals(CompassPosture.UPRIGHT_AIMING, posture)
+        assertEquals(CompassPosture.AIM_DOWN, posture)
 
-        // Flatter than -53 deg (skywardPitch = 36 deg -> r8 = cos(36)=0.809 > 0.799) drops back to FLAT_MAP
+        // Raised above -17° (r7 = -0.292 > -0.309) returns to FLAT_MAP
         posture = CompassFusionMath.resolvePostureFromSkywardZ(
-            r7 = sin(Math.toRadians(36.0)),
+            r7 = sin(Math.toRadians(-17.0)),
             previousPosture = posture,
-            r8 = cos(Math.toRadians(36.0)),
+            r8 = cos(Math.toRadians(-17.0)),
         )
         assertEquals(CompassPosture.FLAT_MAP, posture)
     }
 
     @Test
-    fun `treestand aim-down (-45, -30, 0 level, +20 uphill) maintains under 0_5 deg azimuth continuity across headings 0, 90, 118, 215, 330`() {
+    fun `flat palm, back-camera stand aim (-55 to +20), and nose-down stand aim (-30 to -70) hold signed pitch and under 0_5 deg azimuth across headings`() {
         val targetHeadings = listOf(0.0, 90.0, 118.0, 215.0, 330.0)
-        // Camera aim pitch = skywardPitch - 90 deg -> aimDeg in {-45, -30, 0, +20}
-        val treestandAimAngles = listOf(-45.0, -30.0, 0.0, 20.0)
+        val backCameraAimAngles = listOf(-55.0, -50.0, -30.0, 0.0, 20.0)
+        val noseDownAimAngles = listOf(-30.0, -50.0, -70.0)
 
         for (heading in targetHeadings) {
-            for (aimDeg in treestandAimAngles) {
-                val skywardPitchDeg = 90.0 + aimDeg
-                val rotVec = buildQuaternionRotationVector(headingDeg = heading, skywardPitchDeg = skywardPitchDeg)
-                val rawMatrix = FloatArray(9)
-                val remappedMatrix = FloatArray(9)
-                SensorManager.getRotationMatrixFromVector(rawMatrix, rotVec)
-                val (axisX, axisY) = CompassFusionMath.displayAxisRemapFor(Surface.ROTATION_0)
-                SensorManager.remapCoordinateSystem(rawMatrix, axisX, axisY, remappedMatrix)
-
+            // 1. Flat palm (0..15 deg casual tilt) stays FLAT_MAP with |pitchDeg| <= 16 deg
+            for (casualTilt in listOf(-10.0, 0.0, 15.0)) {
+                val remapped = quaternionToRemappedMatrix(headingDeg = heading, skywardPitchDeg = casualTilt)
                 val posture = CompassFusionMath.resolvePostureFromSkywardZ(
-                    r7 = remappedMatrix[7].toDouble(),
+                    r7 = remapped[7].toDouble(),
                     previousPosture = CompassPosture.FLAT_MAP,
-                    r8 = remappedMatrix[8].toDouble(),
+                    r8 = remapped[8].toDouble(),
                 )
-                assertEquals(
-                    "Expected UPRIGHT_AIMING at treestand aimDeg=$aimDeg° for heading=$heading°",
-                    CompassPosture.UPRIGHT_AIMING,
-                    posture,
-                )
+                assertEquals(CompassPosture.FLAT_MAP, posture)
+                val pitch = CompassFusionMath.extractPitchDeg(remapped, posture)
+                assertTrue("Casual flat tilt pitch=$pitch expected within ±16°", kotlin.math.abs(pitch) <= 16.0)
+                val extracted = CompassFusionMath.extractMagneticAzimuthFromMatrix(remapped, posture)
+                assertTrue(AngleMath.angularDistanceDegrees(heading, extracted) < 0.5)
+            }
 
-                val measuredPitch = CompassFusionMath.extractAimPitchDeg(remappedMatrix)
-                assertEquals(
-                    "Aim pitch mismatch at aimDeg=$aimDeg°",
-                    aimDeg,
-                    measuredPitch,
-                    0.5,
+            // 2. Back-camera treestand aim (-55, -50, -30, 0, +20) -> UPRIGHT_AIMING, negative depression pitch, <0.5 deg error
+            for (aimDeg in backCameraAimAngles) {
+                val remapped = quaternionToRemappedMatrix(headingDeg = heading, skywardPitchDeg = 90.0 + aimDeg)
+                val posture = CompassFusionMath.resolvePostureFromSkywardZ(
+                    r7 = remapped[7].toDouble(),
+                    previousPosture = CompassPosture.FLAT_MAP,
+                    r8 = remapped[8].toDouble(),
                 )
-
-                val extracted = CompassFusionMath.extractMagneticAzimuthFromMatrix(remappedMatrix, posture)
+                assertEquals("Expected UPRIGHT_AIMING at back-camera aim=$aimDeg°", CompassPosture.UPRIGHT_AIMING, posture)
+                val pitch = CompassFusionMath.extractPitchDeg(remapped, posture)
+                assertEquals("Pitch mismatch at back-camera aim=$aimDeg°", aimDeg, pitch, 1.0)
+                val extracted = CompassFusionMath.extractMagneticAzimuthFromMatrix(remapped, posture)
                 val delta = AngleMath.angularDistanceDegrees(heading, extracted)
-                assertTrue(
-                    "Treestand heading=$heading° aim=$aimDeg° produced $extracted° (delta=$delta°)",
-                    delta < 0.5,
+                assertTrue("Back-camera heading=$heading° aim=$aimDeg° -> $extracted° (delta=$delta°)", delta < 0.5)
+            }
+
+            // 3. Nose-down top-edge treestand aim (-30, -50, -70) -> AIM_DOWN, negative pitch, <0.5 deg error (zero 180 flip)
+            for (aimDeg in noseDownAimAngles) {
+                val remapped = quaternionToRemappedMatrix(headingDeg = heading, skywardPitchDeg = aimDeg)
+                val posture = CompassFusionMath.resolvePostureFromSkywardZ(
+                    r7 = remapped[7].toDouble(),
+                    previousPosture = CompassPosture.FLAT_MAP,
+                    r8 = remapped[8].toDouble(),
                 )
+                assertEquals("Expected AIM_DOWN at nose-down aim=$aimDeg°", CompassPosture.AIM_DOWN, posture)
+                val pitch = CompassFusionMath.extractPitchDeg(remapped, posture)
+                assertEquals("Pitch mismatch at nose-down aim=$aimDeg°", aimDeg, pitch, 1.0)
+                val extracted = CompassFusionMath.extractMagneticAzimuthFromMatrix(remapped, posture)
+                val delta = AngleMath.angularDistanceDegrees(heading, extracted)
+                assertTrue("Nose-down heading=$heading° aim=$aimDeg° -> $extracted° (delta=$delta°)", delta < 0.5)
             }
         }
+    }
+
+    @Test
+    fun `smooth sweep from flat to nose-down to flat to back-camera produces zero heading spikes and gimbal guard holds azimuth near nadir`() {
+        val targetHeadings = listOf(0.0, 90.0, 118.0, 215.0, 330.0)
+        // Sequence: flat(0) -> nose-down(-35, -50) -> flat(-10, 0, +10) -> back-camera(-50 [sky=40], -30 [sky=60], 0 [sky=90])
+        val skywardSweep = listOf(0.0, -35.0, -50.0, -10.0, 0.0, 10.0, 40.0, 60.0, 90.0)
+        val expectedPostures = listOf(
+            CompassPosture.FLAT_MAP,
+            CompassPosture.AIM_DOWN,
+            CompassPosture.AIM_DOWN,
+            CompassPosture.FLAT_MAP,
+            CompassPosture.FLAT_MAP,
+            CompassPosture.FLAT_MAP,
+            CompassPosture.UPRIGHT_AIMING,
+            CompassPosture.UPRIGHT_AIMING,
+            CompassPosture.UPRIGHT_AIMING,
+        )
+
+        for (heading in targetHeadings) {
+            var posture = CompassPosture.FLAT_MAP
+            var lastAzimuth: Double? = null
+            skywardSweep.forEachIndexed { idx, skyPitch ->
+                val remapped = quaternionToRemappedMatrix(headingDeg = heading, skywardPitchDeg = skyPitch)
+                posture = CompassFusionMath.resolvePostureFromSkywardZ(
+                    r7 = remapped[7].toDouble(),
+                    previousPosture = posture,
+                    r8 = remapped[8].toDouble(),
+                )
+                assertEquals("Sweep step $idx (skyPitch=$skyPitch) heading=$heading", expectedPostures[idx], posture)
+                val extracted = CompassFusionMath.extractMagneticAzimuthFromMatrix(remapped, posture, lastAzimuth)
+                lastAzimuth = extracted
+                val delta = AngleMath.angularDistanceDegrees(heading, extracted)
+                assertTrue("Sweep step $idx heading=$heading° got $extracted° (delta=$delta°)", delta < 0.5)
+            }
+        }
+
+        // Gimbal guard near -88° nadir holds previous azimuth instead of flipping noisily
+        val nadirMatrix = quaternionToRemappedMatrix(headingDeg = 215.0, skywardPitchDeg = -88.0)
+        val guarded = CompassFusionMath.extractMagneticAzimuthFromMatrix(
+            remappedMatrix = nadirMatrix,
+            posture = CompassPosture.AIM_DOWN,
+            previousAzimuthDeg = 215.0,
+        )
+        assertEquals(215.0, guarded, 1e-6)
+        assertEquals("+3°", CompassFusionMath.formatSignedPitchDeg(3.2))
+        assertEquals("0°", CompassFusionMath.formatSignedPitchDeg(-0.2))
+        assertEquals("-50°", CompassFusionMath.formatSignedPitchDeg(-50.0))
+        assertEquals("--°", CompassFusionMath.formatSignedPitchDeg(Double.NaN))
+        assertEquals("--°", CompassFusionMath.formatSignedPitchDeg(Double.POSITIVE_INFINITY))
+    }
+
+    private fun quaternionToRemappedMatrix(headingDeg: Double, skywardPitchDeg: Double): FloatArray {
+        val rotVec = buildQuaternionRotationVector(headingDeg = headingDeg, skywardPitchDeg = skywardPitchDeg)
+        val rawMatrix = FloatArray(9)
+        val remappedMatrix = FloatArray(9)
+        SensorManager.getRotationMatrixFromVector(rawMatrix, rotVec)
+        val (axisX, axisY) = CompassFusionMath.displayAxisRemapFor(Surface.ROTATION_0)
+        SensorManager.remapCoordinateSystem(rawMatrix, axisX, axisY, remappedMatrix)
+        return remappedMatrix
     }
 
     @Test
@@ -319,10 +406,41 @@ class CompassAndBarometerMathTest {
                         previousPosture = posture,
                         r8 = remappedMatrix[8].toDouble(),
                     )
+                    if (pitch == 40.0) {
+                        assertEquals(CompassPosture.UPRIGHT_AIMING, posture)
+                        assertEquals(-50.0, CompassFusionMath.extractPitchDeg(remappedMatrix, posture), 1.0)
+                    }
                     val extracted = CompassFusionMath.extractMagneticAzimuthFromMatrix(remappedMatrix, posture)
                     val delta = AngleMath.angularDistanceDegrees(heading, extracted)
                     assertTrue(
                         "rot=$displayRotation heading=$heading° pitch=$pitch° posture=$posture produced $extracted° (delta=$delta°)",
+                        delta < 0.5,
+                    )
+                }
+
+                var noseDownPosture = CompassPosture.FLAT_MAP
+                for (noseDownPitch in listOf(-35.0, -50.0)) {
+                    val rotVec = buildQuaternionRotationVector(
+                        headingDeg = heading,
+                        skywardPitchDeg = noseDownPitch,
+                        displayRollZDeg = rollZDeg,
+                    )
+                    val rawMatrix = FloatArray(9)
+                    val remappedMatrix = FloatArray(9)
+                    SensorManager.getRotationMatrixFromVector(rawMatrix, rotVec)
+                    SensorManager.remapCoordinateSystem(rawMatrix, axisX, axisY, remappedMatrix)
+
+                    noseDownPosture = CompassFusionMath.resolvePostureFromSkywardZ(
+                        r7 = remappedMatrix[7].toDouble(),
+                        previousPosture = noseDownPosture,
+                        r8 = remappedMatrix[8].toDouble(),
+                    )
+                    assertEquals(CompassPosture.AIM_DOWN, noseDownPosture)
+                    assertEquals(noseDownPitch, CompassFusionMath.extractPitchDeg(remappedMatrix, noseDownPosture), 1.0)
+                    val extracted = CompassFusionMath.extractMagneticAzimuthFromMatrix(remappedMatrix, noseDownPosture)
+                    val delta = AngleMath.angularDistanceDegrees(heading, extracted)
+                    assertTrue(
+                        "rot=$displayRotation nose-down heading=$heading° pitch=$noseDownPitch° produced $extracted° (delta=$delta°)",
                         delta < 0.5,
                     )
                 }

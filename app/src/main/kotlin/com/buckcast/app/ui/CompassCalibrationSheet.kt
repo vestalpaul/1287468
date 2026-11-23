@@ -42,6 +42,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.buckcast.domain.math.AngleMath
 import com.buckcast.sensors.CompassAccuracy
+import com.buckcast.sensors.CompassFusionMath
 import com.buckcast.sensors.CompassPosture
 import com.buckcast.sensors.CompassReading
 import com.buckcast.sensors.CompassSensorSource
@@ -141,16 +142,12 @@ fun CompassCalibrationSheet(
                         ?.let { String.format(Locale.US, "%+.1f°", it.declinationDeg) }
                         ?: "0.0°"
                     val postureStr = when (reading?.posture) {
-                        CompassPosture.UPRIGHT_AIMING -> "Aim"
-                        else -> "Flat"
+                        CompassPosture.FLAT_MAP, null -> "Flat Map"
+                        CompassPosture.UPRIGHT_AIMING -> "Upright Aim"
+                        CompassPosture.AIM_DOWN -> "Stand Aim-Down"
                     }
                     val pitchStr = reading?.takeIf { it.isSensorAvailable }?.let {
-                        val deg = if (it.posture == CompassPosture.UPRIGHT_AIMING) {
-                            it.pitchDeg.roundToInt()
-                        } else {
-                            (90.0 + it.pitchDeg).roundToInt().coerceIn(0, 90)
-                        }
-                        String.format(Locale.US, "%+d°", deg)
+                        CompassFusionMath.formatSignedPitchDeg(it.pitchDeg)
                     } ?: "--°"
                     val sourceStr = when (reading?.sensorSource) {
                         CompassSensorSource.ROTATION_VECTOR -> "Rotation Vector (Gyro+Mag)"

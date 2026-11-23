@@ -4,6 +4,7 @@ import android.graphics.RectF
 import android.os.SystemClock
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.AddLocationAlt
+import androidx.compose.material.icons.rounded.Air
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DownloadForOffline
 import androidx.compose.material.icons.rounded.Explore
@@ -76,6 +78,7 @@ import com.buckcast.domain.math.CompassDirection
 import com.buckcast.domain.math.GeoPoint
 import com.buckcast.domain.wind.WindAlignmentBadge
 import com.buckcast.sensors.CompassAccuracy
+import com.buckcast.sensors.CompassFusionMath
 import com.buckcast.sensors.CompassPosture
 import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.camera.CameraUpdateFactory
@@ -93,6 +96,7 @@ import org.maplibre.android.style.layers.PropertyFactory
 import org.maplibre.android.style.layers.SymbolLayer
 import org.maplibre.android.style.sources.GeoJsonSource
 import java.util.Locale
+import kotlin.math.roundToInt
 
 private const val SRC_ROUTES = "droptine-routes-src"
 private const val SRC_RANGE_RINGS = "droptine-rings-src"
@@ -151,6 +155,7 @@ fun MapScreen(
     val offlinePackManager = remember(context) { OfflineMapPackManager.getInstance(context) }
     val packState by offlinePackManager.state.collectAsStateWithLifecycle()
     var showOfflineSheet by remember { mutableStateOf(false) }
+    var showMilkweedSheet by remember { mutableStateOf(false) }
     var capturedBounds by remember { mutableStateOf<ViewportBoundingBox?>(null) }
 
     DisposableEffect(viewModel) {
@@ -163,7 +168,10 @@ fun MapScreen(
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_START -> mapView.onStart()
-                Lifecycle.Event.ON_RESUME -> mapView.onResume()
+                Lifecycle.Event.ON_RESUME -> {
+                    viewModel.reevaluateWindOverrideExpiry()
+                    mapView.onResume()
+                }
                 Lifecycle.Event.ON_PAUSE -> mapView.onPause()
                 Lifecycle.Event.ON_STOP -> mapView.onStop()
                 else -> Unit
@@ -485,6 +493,22 @@ fun MapScreen(
                             )
                         },
                     )
+                    FilterChip(
+                        selected = state.liveWindOverride != null,
+                        onClick = {
+                            viewModel.reevaluateWindOverrideExpiry()
+                            showMilkweedSheet = true
+                        },
+                        colors = chipColors,
+                        label = { Text("Milkweed", maxLines = 1, softWrap = false) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Rounded.Air,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        },
+                    )
                     AssistChip(
                         onClick = {
                             if (!state.canUseOfflinePacks) {
@@ -675,7 +699,7 @@ fun MapScreen(
                             val distText = scout.distanceYards?.let { String.format(Locale.US, "%.0f yd", it) } ?: "Tap point"
                             val bearText = scout.bearingFromUserDeg?.let { compassHeadingLabel(it) } ?: ""
                             Text(
-                                text = "$distText $bearText · Scent blows ${CompassDirection.fromBearing(scout.scentToDeg).abbreviation} @ ${scout.windSpeedMph.toInt()} mph",
+                                text = "$distText $bearText · Scent blows ${CompassDirection.fromBearing(scout.scentToDeg).abbreviation} @ ${scout.windSpeedMph.roundToInt()} mph",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -755,35 +779,72 @@ fun MapScreen(
                                 text = state.formattedHeading,
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                softWrap = false,
                             )
                             val reading = state.compassReading
-                            val postureLabel = if (reading?.posture == CompassPosture.UPRIGHT_AIMING) {
-                                val aimDeg = kotlin.math.round(reading.pitchDeg).toInt()
-                                "Aim · $aimDeg°"
-                            } else {
-                                val flatTiltDeg = reading?.let {
-                                    kotlin.math.round(90.0 + it.pitchDeg).toInt().coerceIn(0, 90)
-                                } ?: 0
-                                "Flat · $flatTiltDeg°"
+                            val signedPitch = reading?.takeIf { it.isSensorAvailable }?.let {
+                                CompassFusionMath.formatSignedPitchDeg(it.pitchDeg)
+                            } ?: "--°"
+                            val (postureLabel, isAimActive) = when (reading?.posture) {
+                                CompassPosture.UPRIGHT_AIMING, CompassPosture.AIM_DOWN -> "Aim · $signedPitch" to true
+                                CompassPosture.FLAT_MAP, null -> "Flat · $signedPitch" to false
                             }
                             Surface(
-                                color = MaterialTheme.colorScheme.primaryContainer,
+                                color = if (isAimActive) {
+                                    MaterialTheme.colorScheme.primaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.secondaryContainer
+                                },
                                 shape = MaterialTheme.shapes.extraSmall,
                             ) {
                                 Text(
                                     text = postureLabel,
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    color = if (isAimActive) {
+                                        MaterialTheme.colorScheme.onPrimaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.onSecondaryContainer
+                                    },
+                                    maxLines = 1,
+                                    softWrap = false,
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                                 )
                             }
                         }
                         val windLabel = CompassDirection.fromBearing(state.windFromDeg).abbreviation
-                        Text(
-                            text = "Wind $windLabel @ ${state.windSpeedMph.toInt()} mph",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        Row(
+                            modifier = Modifier.clickable {
+                                viewModel.reevaluateWindOverrideExpiry()
+                                showMilkweedSheet = true
+                            },
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Text(
+                                text = "Wind $windLabel @ ${state.windSpeedMph.roundToInt()} mph",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                softWrap = false,
+                            )
+                            if (state.liveWindOverride != null) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                                    shape = MaterialTheme.shapes.extraSmall,
+                                ) {
+                                    Text(
+                                        text = "MILKWEED",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                                    )
+                                }
+                            }
+                        }
                         state.windAlignment?.let { badge ->
                             val badgeText = when (badge) {
                                 WindAlignmentBadge.WIND_IN_FACE -> "IN YOUR FACE"
@@ -800,6 +861,8 @@ fun MapScreen(
                                 style = MaterialTheme.typography.labelMedium,
                                 color = badgeColor,
                                 fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                softWrap = false,
                             )
                         }
                     }
@@ -920,6 +983,19 @@ fun MapScreen(
             onCancelDownload = offlinePackManager::cancelDownload,
             onDeletePack = offlinePackManager::deletePack,
             onDismiss = { showOfflineSheet = false },
+        )
+    }
+
+    if (showMilkweedSheet) {
+        MilkweedWindSheet(
+            liveHeadingDeg = state.compassReading?.takeIf { it.isSensorAvailable }?.trueHeadingDeg,
+            forecastWindFromDeg = state.forecastWindFromDeg,
+            forecastWindSpeedMph = state.forecastWindSpeedMph,
+            activeOverride = state.liveWindOverride,
+            onSnapMilkweedFloat = viewModel::setMilkweedFloatOverride,
+            onApplyManualWind = viewModel::setManualWindOverride,
+            onResetToForecast = viewModel::clearWindOverride,
+            onDismiss = { showMilkweedSheet = false },
         )
     }
 }

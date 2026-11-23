@@ -23,6 +23,7 @@ import com.buckcast.domain.repository.StandRepository
 import com.buckcast.domain.repository.WeatherRepository
 import com.buckcast.domain.wind.StandWindConfig
 import com.buckcast.domain.wind.StandWindEvaluator
+import com.buckcast.domain.wind.LiveWindOverride
 import com.buckcast.domain.wind.ThermalDriftCalculator
 import com.buckcast.domain.wind.ThermalDriftResult
 import com.buckcast.domain.wind.ThermalInput
@@ -121,6 +122,9 @@ data class MapUiState(
     val windAlignment: WindAlignmentBadge? = null,
     val windFromDeg: Double = 315.0,
     val windSpeedMph: Double = 7.0,
+    val forecastWindFromDeg: Double = 315.0,
+    val forecastWindSpeedMph: Double = 7.0,
+    val liveWindOverride: LiveWindOverride? = null,
     val scentOrigin: GeoPoint? = null,
     val scentToDeg: Double = 135.0,
     val thermalDrift: ThermalDriftResult? = null,
@@ -171,7 +175,11 @@ class MapViewModel @Inject constructor(
     private val projectedStandIdFlow = MutableStateFlow<String?>(null)
     private val routeDrawingFlow = MutableStateFlow<RouteDrawingState?>(null)
     private val repositioningStandNameFlow = MutableStateFlow<String?>(null)
+    private val liveWindOverrideFlow = MutableStateFlow<LiveWindOverride?>(null)
     private val statusMessageFlow = MutableStateFlow<String?>(null)
+    private val expiryReevalNonceFlow = MutableStateFlow(0L)
+
+    internal var clockMs: () -> Long = { System.currentTimeMillis() }
 
     private var previousWindAlignmentBadge: WindAlignmentBadge? = null
 
@@ -204,9 +212,17 @@ class MapViewModel @Inject constructor(
             scoutTargetFlow,
             projectedStandIdFlow,
             combine(routeDrawingFlow, repositioningStandNameFlow) { drawing, repoName -> drawing to repoName },
-            statusMessageFlow,
-        ) { scoutEnabled, scoutTarget, projectedStandId, drawAndRepo, status ->
-            ToolExtras(scoutEnabled, scoutTarget, projectedStandId, drawAndRepo.first, drawAndRepo.second, status)
+            combine(liveWindOverrideFlow, statusMessageFlow, expiryReevalNonceFlow) { ovr, status, _ -> ovr to status },
+        ) { scoutEnabled, scoutTarget, projectedStandId, drawAndRepo, windAndStatus ->
+            ToolExtras(
+                scoutEnabled = scoutEnabled,
+                scoutTarget = scoutTarget,
+                projectedStandId = projectedStandId,
+                routeDrawing = drawAndRepo.first,
+                repositioningStandName = drawAndRepo.second,
+                liveWindOverride = windAndStatus.first,
+                status = windAndStatus.second,
+            )
         },
     ) { cameraAndOrient, baseLayer, showHillshade, showRangeRings, extras ->
         LayerToolState(
@@ -221,6 +237,7 @@ class MapViewModel @Inject constructor(
             projectedStandId = extras.projectedStandId,
             routeDrawing = extras.routeDrawing,
             repositioningStandName = extras.repositioningStandName,
+            liveWindOverride = extras.liveWindOverride,
             statusMessage = extras.status,
         )
     }
@@ -337,6 +354,42 @@ class MapViewModel @Inject constructor(
 
     fun recalibrateCompass() {
         compass.recalibrate()
+    }
+
+    fun setMilkweedFloatOverride(downwindHeadingDeg: Double, speedMph: Double? = null) {
+        if (!downwindHeadingDeg.isFinite()) return
+        val resolvedSpeed = (speedMph?.takeIf { it.isFinite() && it >= 0.0 }
+            ?: uiState.value.forecastWindSpeedMph)
+            .coerceIn(0.0, 80.0)
+        val now = clockMs()
+        liveWindOverrideFlow.value = LiveWindOverride.fromMilkweedFloat(
+            downwindFloatHeadingDeg = downwindHeadingDeg,
+            windSpeedMph = resolvedSpeed,
+            setAtEpochMs = now,
+        )
+    }
+
+    fun setManualWindOverride(windFromDeg: Double, speedMph: Double) {
+        if (!windFromDeg.isFinite() || !speedMph.isFinite()) return
+        val now = clockMs()
+        liveWindOverrideFlow.value = LiveWindOverride(
+            windFromDeg = AngleMath.normalizeDegrees(windFromDeg),
+            windSpeedMph = speedMph.coerceIn(0.0, 80.0),
+            setAtEpochMs = now,
+        )
+    }
+
+    fun clearWindOverride() {
+        liveWindOverrideFlow.value = null
+    }
+
+    fun reevaluateWindOverrideExpiry() {
+        val current = liveWindOverrideFlow.value ?: return
+        if (current.isExpired(clockMs())) {
+            liveWindOverrideFlow.value = null
+        } else {
+            expiryReevalNonceFlow.value += 1L
+        }
     }
 
     fun selectBaseLayer(layer: MapBaseLayer): Boolean {
@@ -553,12 +606,17 @@ class MapViewModel @Inject constructor(
             tools.camera
         }
 
-        val nowInstant = Instant.now()
+        val nowEpochMs = clockMs()
+        val nowInstant = Instant.ofEpochMilli(nowEpochMs)
         val nowSec = nowInstant.epochSecond
         val currentHour = data.weather?.hourly?.minByOrNull { abs(it.epochSeconds - nowSec) }
-        val windFromDeg = currentHour?.windFromDeg ?: 315.0
-        val windSpeedMph = currentHour?.windSpeedMph ?: 7.0
+        val forecastWindFromDeg = AngleMath.normalizeDegrees(currentHour?.windFromDeg ?: 315.0)
+        val forecastWindSpeedMph = currentHour?.windSpeedMph ?: 7.0
         val cloudPct = currentHour?.cloudCoverPercent ?: 25.0
+
+        val activeOverride = tools.liveWindOverride?.takeIf { !it.isExpired(nowEpochMs) }
+        val effectiveWindFromDeg = activeOverride?.windFromDeg ?: forecastWindFromDeg
+        val effectiveWindSpeedMph = activeOverride?.windSpeedMph ?: forecastWindSpeedMph
 
         val zoneId = data.weather?.timezoneId?.let { runCatching { ZoneId.of(it) }.getOrNull() }
             ?: ZoneId.systemDefault()
@@ -575,6 +633,7 @@ class MapViewModel @Inject constructor(
         }
 
         val thermalDrift = if (
+            activeOverride == null &&
             canUseScentCones &&
             activeStandForThermal?.slopeAspectDeg != null &&
             activeStandForThermal.slopeGradePercent != null &&
@@ -589,15 +648,15 @@ class MapViewModel @Inject constructor(
                     sunrise = todaySolar.sunrise!!,
                     sunset = todaySolar.sunset!!,
                     cloudCoverPercent = cloudPct,
-                    ambientWindSpeedMph = windSpeedMph,
-                    ambientWindFromDeg = windFromDeg,
+                    ambientWindSpeedMph = effectiveWindSpeedMph,
+                    ambientWindFromDeg = effectiveWindFromDeg,
                 ),
             )
         } else {
             null
         }
 
-        val effectiveScentToDeg = thermalDrift?.effectiveScentToDeg ?: AngleMath.oppositeBearing(windFromDeg)
+        val effectiveScentToDeg = thermalDrift?.effectiveScentToDeg ?: AngleMath.oppositeBearing(effectiveWindFromDeg)
 
         compass.setCompassOffsetDeg(data.settings.compassOffsetDeg)
 
@@ -610,7 +669,7 @@ class MapViewModel @Inject constructor(
         val windAlignment = if (canUseScentCones && compassReading.isSensorAvailable) {
             WindAlignmentClassifier.classify(
                 facingHeadingDeg = compassReading.trueHeadingDeg,
-                windFromDeg = windFromDeg,
+                windFromDeg = effectiveWindFromDeg,
                 previousBadge = previousWindAlignmentBadge,
                 hysteresisDeg = WindAlignmentClassifier.DEFAULT_HYSTERESIS_DEG,
             ).also { previousWindAlignmentBadge = it }
@@ -639,8 +698,8 @@ class MapViewModel @Inject constructor(
                         standName = stand.name,
                         preferredWindFromSectors = stand.preferredWindSectors,
                     ),
-                    ambientWindFromDeg = windFromDeg,
-                    ambientWindSpeedMph = windSpeedMph,
+                    ambientWindFromDeg = effectiveWindFromDeg,
+                    ambientWindSpeedMph = effectiveWindSpeedMph,
                     thermalDrift = thermalDrift.takeIf { stand.id == activeStandForThermal?.id },
                 ).verdict
             } else {
@@ -668,9 +727,9 @@ class MapViewModel @Inject constructor(
                 targetPoint = target,
                 distanceYards = userLocation?.let { GeoMath.distanceYards(it, target) },
                 bearingFromUserDeg = userLocation?.let { GeoMath.initialBearingDegrees(it, target) },
-                windFromDeg = windFromDeg,
+                windFromDeg = effectiveWindFromDeg,
                 scentToDeg = effectiveScentToDeg,
-                windSpeedMph = windSpeedMph,
+                windSpeedMph = effectiveWindSpeedMph,
             )
         }
 
@@ -691,8 +750,11 @@ class MapViewModel @Inject constructor(
             compassReading = compassReading,
             formattedHeading = formattedHeading,
             windAlignment = windAlignment,
-            windFromDeg = windFromDeg,
-            windSpeedMph = windSpeedMph,
+            windFromDeg = effectiveWindFromDeg,
+            windSpeedMph = effectiveWindSpeedMph,
+            forecastWindFromDeg = forecastWindFromDeg,
+            forecastWindSpeedMph = forecastWindSpeedMph,
+            liveWindOverride = activeOverride,
             scentOrigin = scentOrigin,
             scentToDeg = effectiveScentToDeg,
             thermalDrift = thermalDrift,
@@ -717,6 +779,7 @@ class MapViewModel @Inject constructor(
         val projectedStandId: String?,
         val routeDrawing: RouteDrawingState?,
         val repositioningStandName: String?,
+        val liveWindOverride: LiveWindOverride?,
         val status: String?,
     )
 
@@ -732,6 +795,7 @@ class MapViewModel @Inject constructor(
         val projectedStandId: String?,
         val routeDrawing: RouteDrawingState?,
         val repositioningStandName: String?,
+        val liveWindOverride: LiveWindOverride?,
         val statusMessage: String?,
     )
 

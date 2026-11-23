@@ -12,10 +12,14 @@ import com.buckcast.domain.wind.WindAlignmentClassifier
 import kotlin.math.asin
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.hypot
+import kotlin.math.roundToInt
+import kotlin.math.sin
 
 enum class CompassPosture {
     FLAT_MAP,
     UPRIGHT_AIMING,
+    AIM_DOWN,
 }
 
 enum class CompassAccuracy {
@@ -49,29 +53,37 @@ data class CompassReading(
 
 /**
  * Pure sensor-fusion math using direct 3x3 display-remapped rotation-matrix column projection,
- * treestand aim-down + level + uphill posture hysteresis (`R[8] < cos(45°)` & `R[7] > 0.20`),
- * circular EMA smoothing, `[0.0, 360.0)` normalization, manual trim offset (`-15°..+15°`),
- * safe tenths rounding, and 10-mile magnetic declination caching.
+ * unified 3-state treestand posture hysteresis (`FLAT_MAP`, `UPRIGHT_AIMING`, `AIM_DOWN`),
+ * signed pitch (`-` aiming downward, `0°` level, `+` tilted upward), circular EMA smoothing,
+ * `[0.0, 360.0)` normalization, manual trim offset (`-15°..+15°`), safe tenths rounding,
+ * and 10-mile magnetic declination caching.
  */
 object CompassFusionMath {
 
-    const val UPRIGHT_ENTER_AIM_DEPRESSION_DEG = 45.0
-    const val UPRIGHT_EXIT_AIM_DEPRESSION_DEG = 37.0
-    const val UPRIGHT_MIN_R7 = 0.20
+    const val UPRIGHT_MIN_R7 = 0.25
     const val UPRIGHT_EXIT_MIN_R7 = 0.15
+    const val UPRIGHT_ENTER_SCREEN_TILT_DEG = 30.0
+    const val UPRIGHT_EXIT_SCREEN_TILT_DEG = 22.0
+    const val AIM_DOWN_ENTER_PITCH_DEG = 25.0
+    const val AIM_DOWN_EXIT_PITCH_DEG = 18.0
+    const val AIM_DOWN_GIMBAL_MIN_HORIZ = 0.08
     const val MIN_COMPASS_OFFSET_DEG = -15.0
     const val MAX_COMPASS_OFFSET_DEG = 15.0
     const val DEFAULT_EMA_ALPHA = 0.20
 
-    private val UPRIGHT_ENTER_MAX_R8 = cos(AngleMath.toRadians(UPRIGHT_ENTER_AIM_DEPRESSION_DEG)) + 1e-4
-    private val UPRIGHT_EXIT_MIN_R8 = cos(AngleMath.toRadians(UPRIGHT_EXIT_AIM_DEPRESSION_DEG))
+    private val UPRIGHT_ENTER_MAX_R8 = cos(AngleMath.toRadians(UPRIGHT_ENTER_SCREEN_TILT_DEG)) + 1e-4
+    private val UPRIGHT_EXIT_MIN_R8 = cos(AngleMath.toRadians(UPRIGHT_EXIT_SCREEN_TILT_DEG))
+    private val AIM_DOWN_ENTER_MAX_R7 = -sin(AngleMath.toRadians(AIM_DOWN_ENTER_PITCH_DEG))
+    private val AIM_DOWN_EXIT_MIN_R7 = -sin(AngleMath.toRadians(AIM_DOWN_EXIT_PITCH_DEG))
 
     /**
      * Resolves device posture from world-from-device rotation matrix components `R[7]`
-     * (device `+Y` Up) and `R[8]` (device `+Z` screen normal Up) with 8° hysteresis:
-     * - Enters `UPRIGHT_AIMING` when `R[8] < cos(45°)` (`0.707`) AND `R[7] > 0.20`
-     *   (covering `-45°` aim down out of a treestand through `0°` level to `+45°` uphill).
-     * - Returns to `FLAT_MAP` when `R[8] > cos(37°)` (`0.799`) or `R[7] <= 0.15`.
+     * (device `+Y` Up) and `R[8]` (device `+Z` screen normal Up) with hysteresis:
+     * - `UPRIGHT_AIMING`: back-camera aiming (`-60°` down from treestand through `0°` level to `+60°` uphill),
+     *   entering when `R[7] > 0.25` and `R[8] < cos(30°)` (`0.866`), exiting to `FLAT_MAP` when
+     *   `R[8] > cos(22°)` (`0.927`) or `R[7] < 0.15`.
+     * - `AIM_DOWN`: nose-down palm grip aiming (`-25°` to `-80°` below horizontal), entering when
+     *   `R[7] < -sin(25°)` (`-0.423`), exiting to `FLAT_MAP` when `R[7] > -sin(18°)` (`-0.309`).
      */
     fun resolvePostureFromSkywardZ(
         r7: Double,
@@ -81,25 +93,56 @@ object CompassFusionMath {
         require(r7.isFinite()) { "r7 must be finite: $r7" }
         require(r8.isFinite()) { "r8 must be finite: $r8" }
         return when (previousPosture) {
-            CompassPosture.FLAT_MAP ->
-                if (r8 < UPRIGHT_ENTER_MAX_R8 && r7 > UPRIGHT_MIN_R7) {
-                    CompassPosture.UPRIGHT_AIMING
-                } else {
-                    CompassPosture.FLAT_MAP
-                }
-            CompassPosture.UPRIGHT_AIMING ->
-                if (r8 > UPRIGHT_EXIT_MIN_R8 || r7 <= UPRIGHT_EXIT_MIN_R7) {
-                    CompassPosture.FLAT_MAP
-                } else {
-                    CompassPosture.UPRIGHT_AIMING
-                }
+            CompassPosture.FLAT_MAP -> when {
+                r7 > UPRIGHT_MIN_R7 && r8 < UPRIGHT_ENTER_MAX_R8 -> CompassPosture.UPRIGHT_AIMING
+                r7 < AIM_DOWN_ENTER_MAX_R7 -> CompassPosture.AIM_DOWN
+                else -> CompassPosture.FLAT_MAP
+            }
+            CompassPosture.UPRIGHT_AIMING -> when {
+                r7 < AIM_DOWN_ENTER_MAX_R7 -> CompassPosture.AIM_DOWN
+                r8 > UPRIGHT_EXIT_MIN_R8 || r7 < UPRIGHT_EXIT_MIN_R7 -> CompassPosture.FLAT_MAP
+                else -> CompassPosture.UPRIGHT_AIMING
+            }
+            CompassPosture.AIM_DOWN -> when {
+                r7 > UPRIGHT_MIN_R7 && r8 < UPRIGHT_ENTER_MAX_R8 -> CompassPosture.UPRIGHT_AIMING
+                r7 > AIM_DOWN_EXIT_MIN_R7 -> CompassPosture.FLAT_MAP
+                else -> CompassPosture.AIM_DOWN
+            }
         }
     }
 
     /**
-     * Extracts rear-camera elevation/depression angle in `[-90, 90]` degrees:
-     * `-90°` when lying flat on a table, `-30°` aiming down from a treestand, `0°` level,
-     * `+20°` aiming uphill.
+     * Extracts signed pitch/elevation angle in `[-90, 90]` degrees following the unified sign convention
+     * (**negative** when aiming downward, `0°` level, **positive** when tilted upward):
+     * - `FLAT_MAP` / `AIM_DOWN`: `asin(R[7])` (tilting top `+Y` edge downward gives negative degrees).
+     * - `UPRIGHT_AIMING`: `asin(-R[8])` (aiming back-camera `-Z` downward gives negative degrees).
+     */
+    fun extractPitchDeg(
+        remappedMatrix: FloatArray,
+        posture: CompassPosture,
+    ): Double {
+        require(remappedMatrix.size >= 9) { "Expected 3x3 rotation matrix" }
+        val raw = when (posture) {
+            CompassPosture.FLAT_MAP, CompassPosture.AIM_DOWN ->
+                remappedMatrix[7].toDouble()
+            CompassPosture.UPRIGHT_AIMING ->
+                -remappedMatrix[8].toDouble()
+        }
+        require(raw.isFinite()) { "Matrix pitch component must be finite: $raw" }
+        return AngleMath.toDegrees(asin(raw.coerceIn(-1.0, 1.0)))
+    }
+
+    /**
+     * Formats signed pitch as `+3°`, `0°`, or `-50°`.
+     */
+    fun formatSignedPitchDeg(pitchDeg: Double): String {
+        if (!pitchDeg.isFinite()) return "--°"
+        val rounded = pitchDeg.coerceIn(-90.0, 90.0).roundToInt()
+        return if (rounded > 0) "+${rounded}°" else "${rounded}°"
+    }
+
+    /**
+     * Extracts rear-camera elevation/depression angle in `[-90, 90]` degrees (`asin(-R[8])`).
      */
     fun extractAimPitchDeg(remappedMatrix: FloatArray): Double {
         require(remappedMatrix.size >= 9) { "Expected 3x3 rotation matrix" }
@@ -107,7 +150,7 @@ object CompassFusionMath {
     }
 
     /**
-     * Extracts signed skyward pitch angle of the top `+Y` edge in `[-90, 90]` degrees.
+     * Extracts signed skyward pitch angle of the top `+Y` edge in `[-90, 90]` degrees (`asin(R[7])`).
      */
     fun extractSkywardPitchDeg(remappedMatrix: FloatArray): Double {
         require(remappedMatrix.size >= 9) { "Expected 3x3 rotation matrix" }
@@ -118,10 +161,13 @@ object CompassFusionMath {
      * Projects the active aiming axis directly from a display-rotation-remapped 3x3 world rotation matrix:
      * - `FLAT_MAP`: projects device `+Y` top edge (`atan2(R[1], R[4])`).
      * - `UPRIGHT_AIMING`: projects rear camera `-Z` axis (`atan2(-R[2], -R[5])`).
+     * - `AIM_DOWN`: projects device `+Y` top edge (`atan2(R[1], R[4])`), holding [previousAzimuthDeg]
+     *   if horizontal `+Y` norm drops below `0.08` near vertical nadir.
      */
     fun extractMagneticAzimuthFromMatrix(
         remappedMatrix: FloatArray,
         posture: CompassPosture,
+        previousAzimuthDeg: Double? = null,
     ): Double {
         require(remappedMatrix.size >= 9) { "Expected 3x3 rotation matrix" }
         val rad = when (posture) {
@@ -129,6 +175,13 @@ object CompassFusionMath {
                 atan2(remappedMatrix[1].toDouble(), remappedMatrix[4].toDouble())
             CompassPosture.UPRIGHT_AIMING ->
                 atan2(-remappedMatrix[2].toDouble(), -remappedMatrix[5].toDouble())
+            CompassPosture.AIM_DOWN -> {
+                val horizNorm = hypot(remappedMatrix[1].toDouble(), remappedMatrix[4].toDouble())
+                if (horizNorm < AIM_DOWN_GIMBAL_MIN_HORIZ && previousAzimuthDeg != null) {
+                    return AngleMath.normalizeDegrees(previousAzimuthDeg)
+                }
+                atan2(remappedMatrix[1].toDouble(), remappedMatrix[4].toDouble())
+            }
         }
         return AngleMath.normalizeDegrees(AngleMath.toDegrees(rad))
     }

@@ -103,6 +103,15 @@ object AngleMath {
     fun toDegrees(radians: Double): Double = radians * (HALF_CIRCLE_DEG / PI)
 
     /**
+     * Rounds [degrees] to the nearest whole degree wrapped safely into `[0, 359]`
+     * so values such as `359.6°` become `0°` and never `360°`.
+     */
+    fun roundWholeDegrees(degrees: Double): Int {
+        val norm = normalizeDegrees(degrees)
+        return Math.floorMod(norm.roundToInt(), 360)
+    }
+
+    /**
      * Rounds [degrees] to the nearest tenth of a degree wrapped safely into `[0.0, 359.9]`
      * so values such as `359.98°` become `0.0°` and never `360.0°` or `-0.0°`.
      */

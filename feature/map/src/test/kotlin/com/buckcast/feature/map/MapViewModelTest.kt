@@ -411,6 +411,82 @@ class MapViewModelTest {
             job.cancel()
         }
 
+    @Test
+    fun `milkweed float and manual wind override drive scent cone, stand verdicts, wind alignment, Scout projection, and expire after 4h`() =
+        runTest(testDispatcher) {
+            var fakeNowMs = 1_795_000_000_000L
+            // User faces North (0°), forecast wind is FROM North (0° @ 8 mph) -> Ridge Stand prefers N/NW (OPTIMAL), wind IN YOUR FACE
+            val compassFlow = MutableStateFlow(compassReading(heading = 0.0))
+            val vm = createViewModel(
+                entitlementRepo = FakeEntitlementRepo(SubscriptionTier.ALPHA),
+                compassFlow = compassFlow,
+                windFromDeg = 0.0,
+            ).apply {
+                clockMs = { fakeNowMs }
+            }
+            val job = launch { vm.uiState.collect() }
+            advanceUntilIdle()
+
+            assertEquals(0.0, vm.uiState.value.windFromDeg, 1e-6)
+            assertEquals(180.0, vm.uiState.value.scentToDeg, 1e-6)
+            assertEquals(0.0, vm.uiState.value.forecastWindFromDeg, 1e-6)
+            assertNull(vm.uiState.value.liveWindOverride)
+            assertEquals(StandWindVerdict.OPTIMAL, vm.uiState.value.standPins.first().verdict)
+            assertEquals(WindAlignmentBadge.WIND_IN_FACE, vm.uiState.value.windAlignment)
+
+            // Snap to Milkweed Float blowing North (0° -> wind is FROM South 180°)
+            // Ridge Stand (prefers N/NW 315..45) becomes UNSAFE, and hunter facing North now has WIND_AT_BACK!
+            assertTrue(vm.toggleScoutMode())
+            vm.onMapTap(GeoPoint(41.589, -93.621))
+            vm.setMilkweedFloatOverride(downwindHeadingDeg = 0.0)
+            advanceUntilIdle()
+
+            assertTrue(vm.uiState.value.liveWindOverride != null)
+            assertEquals(180.0, vm.uiState.value.windFromDeg, 1e-6)
+            assertEquals(0.0, vm.uiState.value.scentToDeg, 1e-6)
+            assertEquals(0.0, vm.uiState.value.forecastWindFromDeg, 1e-6)
+            assertEquals(StandWindVerdict.UNSAFE, vm.uiState.value.standPins.first().verdict)
+            assertEquals(WindAlignmentBadge.WIND_AT_BACK, vm.uiState.value.windAlignment)
+            assertEquals(180.0, vm.uiState.value.scoutResult!!.windFromDeg, 1e-6)
+            assertEquals(0.0, vm.uiState.value.scoutResult!!.scentToDeg, 1e-6)
+
+            // Manual wind override updates both bearing & speed while retaining forecast reference
+            vm.setManualWindOverride(windFromDeg = 90.0, speedMph = 12.0)
+            advanceUntilIdle()
+            assertEquals(90.0, vm.uiState.value.windFromDeg, 1e-6)
+            assertEquals(270.0, vm.uiState.value.scentToDeg, 1e-6)
+            assertEquals(12.0, vm.uiState.value.windSpeedMph, 1e-6)
+            assertEquals(8.0, vm.uiState.value.forecastWindSpeedMph, 1e-6)
+
+            // Clear restores forecast immediately
+            vm.clearWindOverride()
+            advanceUntilIdle()
+            assertNull(vm.uiState.value.liveWindOverride)
+            assertEquals(0.0, vm.uiState.value.windFromDeg, 1e-6)
+            assertEquals(8.0, vm.uiState.value.windSpeedMph, 1e-6)
+            assertEquals(StandWindVerdict.OPTIMAL, vm.uiState.value.standPins.first().verdict)
+
+            // Verify 4-hour expiry automatically drops override back to forecast
+            vm.setMilkweedFloatOverride(downwindHeadingDeg = 0.0, speedMph = 5.0)
+            advanceUntilIdle()
+            assertEquals(180.0, vm.uiState.value.windFromDeg, 1e-6)
+
+            fakeNowMs += 4L * 60L * 60L * 1000L + 1_000L
+            vm.reevaluateWindOverrideExpiry()
+            advanceUntilIdle()
+            assertNull(vm.uiState.value.liveWindOverride)
+            assertEquals(0.0, vm.uiState.value.windFromDeg, 1e-6)
+            assertEquals(8.0, vm.uiState.value.windSpeedMph, 1e-6)
+
+            // Verify speed clamping on milkweed float override
+            vm.setMilkweedFloatOverride(downwindHeadingDeg = 90.0, speedMph = 120.0)
+            advanceUntilIdle()
+            assertEquals(270.0, vm.uiState.value.windFromDeg, 1e-6)
+            assertEquals(80.0, vm.uiState.value.windSpeedMph, 1e-6)
+
+            job.cancel()
+        }
+
     private fun compassReading(heading: Double): CompassReading = CompassReading(
         trueHeadingDeg = heading,
         magneticHeadingDeg = heading,

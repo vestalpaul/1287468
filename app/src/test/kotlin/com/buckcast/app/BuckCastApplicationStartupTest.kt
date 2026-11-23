@@ -138,7 +138,17 @@ class BuckCastApplicationStartupTest {
                     assertTrue("Missing droptine-base in $url", body.contains("\"droptine-base\""))
                     if (offlineSafe) {
                         assertTrue("Offline style must exclude {bbox-epsg-3857}: $url", !body.contains("{bbox-epsg-3857}"))
+                        assertTrue("Offline style must omit glyphs: $url", !body.contains("\"glyphs\""))
+                        assertTrue("Offline style must omit {fontstack}: $url", !body.contains("{fontstack}"))
+                        assertTrue("Offline style must omit {range}: $url", !body.contains("{range}"))
+                    } else {
+                        assertTrue("Live style must include glyphs: $url", body.contains("\"glyphs\""))
                     }
+                    // Parse body with org.json.JSONObject to guarantee well-formed JSON without trailing/missing commas
+                    val parsed = org.json.JSONObject(body)
+                    assertEquals(8, parsed.getInt("version"))
+                    assertTrue(parsed.getJSONObject("sources").length() >= 1)
+                    assertTrue(parsed.getJSONArray("layers").length() >= 1)
                 }
             }
         }

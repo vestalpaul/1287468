@@ -306,11 +306,18 @@ object MapTileConfig {
             }
         }
 
+        // MapLibre Native OfflineDownload hits std::regex_error (error_badbrace) when {fontstack}/{range}
+        // appears in offline style JSON glyphs; offline styles contain only raster/DEM layers.
+        val glyphsEntry = if (offlineSafe) {
+            ""
+        } else {
+            "\n              \"glyphs\": \"https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf\","
+        }
+
         return """
             {
               "version": 8,
-              "name": "DropTine ${baseLayer.label}",
-              "glyphs": "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
+              "name": "DropTine ${baseLayer.label}",$glyphsEntry
               "sources": {
                 ${sourceEntries.joinToString(",\n                ")}
               },

@@ -262,6 +262,18 @@ class MapViewModelTest {
                         resolved,
                     )
                     val styleJson = resolved!!
+                    // Ensure valid JSON parses cleanly and offline-safe styles omit {fontstack}/{range} glyphs
+                    if (offline) {
+                        assertFalse("Offline style must omit glyphs template for $layer/$hillshade", styleJson.contains("\"glyphs\""))
+                        assertFalse("Offline style must omit {fontstack} for $layer/$hillshade", styleJson.contains("{fontstack}"))
+                        assertFalse("Offline style must omit {range} for $layer/$hillshade", styleJson.contains("{range}"))
+                        assertFalse("Offline style must omit {bbox-epsg-3857} for $layer/$hillshade", styleJson.contains("{bbox-epsg-3857}"))
+                    } else {
+                        assertTrue(
+                            "Live MapView style must retain glyphs for range-ring/stand labels on $layer/$hillshade",
+                            styleJson.contains("\"glyphs\": \"https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf\""),
+                        )
+                    }
                     val sourcesSection = styleJson.substringAfter("\"sources\"").substringBefore("\"layers\"")
                     val sourceBlockCount = Regex(""""type":\s*"raster(?:-dem)?"""").findAll(sourcesSection).count()
                     val tileSizeCount = Regex(""""tileSize":\s*(?:128|256)""").findAll(sourcesSection).count()
